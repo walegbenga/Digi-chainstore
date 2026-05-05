@@ -1,221 +1,185 @@
+// ═══════════════════════════════════════════════════════════
+// my-purchases.tsx
+// ═══════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import ProductDetailModal from '@/components/ProductDetailModal';
 import { API_URL } from '@/lib/api';
+import ProductDetailModal from '@/components/ProductDetailModal';
 
 interface Purchase {
-  id: string;
-  product_id: string;
-  buyer: string;
-  seller: string;
-  price: string;
-  platform_fee: string;
-  tx_digest: string;
-  created_at: string;
-  product_title?: string;
-  product_image?: string;
-  product_category?: string;
-  product_file_cid?: string;
+  id: string; product_id: string; buyer: string; seller: string;
+  price: string; platform_fee: string; tx_digest: string; created_at: string;
+  product_title?: string; product_image?: string;
+  product_category?: string; product_file_cid?: string;
 }
 
 export default function MyPurchases() {
   const account = useCurrentAccount();
-  const [purchases, setPurchases] = useState<Purchase[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [purchases, setPurchases]           = useState<Purchase[]>([]);
+  const [loading, setLoading]               = useState(true);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isModalOpen, setIsModalOpen]       = useState(false);
 
   useEffect(() => {
-    if (account?.address) {
-      fetchPurchases();
-    } else {
-      setLoading(false);
-    }
+    if (account?.address) fetchPurchases();
+    else setLoading(false);
   }, [account?.address]);
 
   const fetchPurchases = async () => {
     if (!account?.address) return;
     setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/api/purchases/${account.address}`);
-      const data = await response.json();
-
-      const purchasesWithProducts = await Promise.all(
-        (data.purchases || []).map(async (purchase: Purchase) => {
+      const res  = await fetch(`${API_URL}/api/purchases/${account.address}`);
+      const data = await res.json();
+      const withProducts = await Promise.all(
+        (data.purchases || []).map(async (p: Purchase) => {
           try {
-            const productResponse = await fetch(
-              `${API_URL}/api/products/${purchase.product_id}`
-            );
-            const productData = await productResponse.json();
-            return {
-              ...purchase,
-              product_title: productData.title,
-              product_image: productData.image_url,
-              product_category: productData.category,
-              product_file_cid: productData.file_cid,
-            };
-          } catch (error) {
-            console.error('Error fetching product:', error);
-            return purchase;
-          }
+            const pr = await fetch(`${API_URL}/api/products/${p.product_id}`);
+            const pd = await pr.json();
+            return { ...p, product_title: pd.title, product_image: pd.image_url, product_category: pd.category, product_file_cid: pd.file_cid };
+          } catch { return p; }
         })
       );
+      setPurchases(withProducts);
+    } catch { toast.error('Failed to fetch purchases'); }
+    finally { setLoading(false); }
+  };
 
-      setPurchases(purchasesWithProducts);
-    } catch (error) {
-      console.error('Error fetching purchases:', error);
-      toast.error('Failed to fetch purchases');
-    } finally {
-      setLoading(false);
+  const formatDate = (ts: string | number) => {
+    const n = Number(ts);
+    if (!n || isNaN(n)) return 'Unknown';
+    return new Date(n).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+
+  const handleDownload = async (productId: string, fileTitle?: string) => {
+    if (!account?.address) return;
+    try {
+      // Step 1: Get signed one-time token
+      const tokenRes = await fetch(`${API_URL}/api/download/${productId}/${account.address}`);
+      if (!tokenRes.ok) {
+        const e = await tokenRes.json();
+        toast.error(e.error || 'Download failed');
+        return;
+      }
+      const { token } = await tokenRes.json();
+      if (!token) { toast.error('Could not generate download link'); return; }
+
+      // Step 2: Fetch file bytes as blob — URL never shown in browser
+      const fileRes = await fetch(`${API_URL}/api/download/file/${token}`);
+      if (!fileRes.ok) { toast.error('Download failed — please try again'); return; }
+
+      const disposition = fileRes.headers.get('content-disposition') || '';
+      const nameMatch   = disposition.match(/filename="?([^"]+)"?/);
+      const fileName    = nameMatch?.[1] || fileTitle || 'download';
+
+      const blob      = await fileRes.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a         = document.createElement('a');
+      a.href          = objectUrl;
+      a.download      = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(objectUrl); document.body.removeChild(a); }, 100);
+      toast.success('Download started! 🎉');
+    } catch (e: any) {
+      toast.error('Download failed. Please try again.');
     }
   };
 
-  const formatDate = (timestamp: string | number) => {
-    const num = Number(timestamp);
-    if (!num || isNaN(num)) return 'Unknown date';
-    return new Date(num).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
-
-  // ✅ SIMPLE DOWNLOAD HANDLER
-  const handleDownload = async (productId: string) => {
-    if (!account?.address) {
-      toast.error('Please connect your wallet');
-      return;
-    }
-    
-    // Just open the URL - backend handles everything
-    const downloadUrl = `${API_URL}/api/download/${productId}/${account.address}`;
-    window.open(downloadUrl, '_blank');
-    toast.success('Download started! 📥');
-  };
-
-  if (!account) {
-    return (
-      <div className="max-w-7xl mx-auto py-12 px-4">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">Wallet Not Connected</h2>
-          <p className="text-gray-600">Please connect your wallet to view your purchases.</p>
-        </div>
+  if (!account) return (
+    <div style={{ maxWidth: 480, margin: '80px auto', padding: '0 16px', textAlign: 'center' }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, padding: 32 }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>🔒</div>
+        <h2 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 20, color: 'var(--text-primary)', marginBottom: 8 }}>Wallet Not Connected</h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Connect your wallet to view your purchases.</p>
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
-    <div className="max-w-7xl mx-auto py-8 px-4">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">💰 My Purchases</h1>
-        <p className="text-gray-500 mt-1">View your purchased products</p>
+    <div style={{ color: 'var(--text-primary)' }}>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 28, marginBottom: 2 }}>My Purchases</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Your purchased digital products</p>
       </div>
 
       {loading ? (
-        <div className="text-center py-12">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-indigo-600 border-r-transparent" />
-          <p className="mt-2 text-gray-600">Loading purchases...</p>
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 16, overflow: 'hidden' }}>
+          {Array.from({length:4}).map((_,i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', gap: 14 }}>
+              <div className="skeleton" style={{ width: 64, height: 64, borderRadius: 10, flexShrink: 0 }} />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                <div className="skeleton" style={{ height: 13, width: '40%' }} />
+                <div className="skeleton" style={{ height: 11, width: '60%' }} />
+              </div>
+            </div>
+          ))}
         </div>
       ) : purchases.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border-2 border-dashed border-gray-300">
-          <h3 className="text-sm font-medium text-gray-900">No purchases yet</h3>
-          <p className="mt-1 text-sm text-gray-500">Browse the marketplace to find products</p>
-          <div className="mt-6">
-            <Link
-              href="/"
-              className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-500"
-            >
-              Browse Marketplace
-            </Link>
-          </div>
+        <div style={{ textAlign: 'center', padding: '64px 16px', background: 'var(--bg-surface)', border: '1px dashed var(--border)', borderRadius: 18 }}>
+          <p style={{ fontSize: 36, marginBottom: 10 }}>🛒</p>
+          <p style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>No purchases yet</p>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>Browse the marketplace to find products</p>
+          <Link href="/" style={{ background: 'linear-gradient(135deg,var(--gold),var(--gold-dim))', color: '#0c0c0f', padding: '10px 20px', borderRadius: 10, fontWeight: 700, fontSize: 13, textDecoration: 'none' }}>
+            Browse Marketplace
+          </Link>
         </div>
       ) : (
-        <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ul className="divide-y divide-gray-200">
-            {purchases.map((purchase) => (
-              <li key={purchase.id}>
-                <div className="px-4 py-4 sm:px-6 hover:bg-gray-50 transition-colors">
-                  <div className="flex items-center">
-                    {purchase.product_image && (
-                      <img
-                        src={purchase.product_image || 'https://via.placeholder.com/80x80?text=No+Image'}
-                        alt={purchase.product_title || 'Product'}
-                        className="h-20 w-20 rounded-lg object-cover"
-                        onError={(e) => {
-                          e.currentTarget.src = 'https://via.placeholder.com/80x80?text=No+Image';
-                        }}
-                      />
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 16, overflow: 'hidden' }}>
+          {purchases.map((p, idx) => (
+            <div key={p.id}
+              style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: idx < purchases.length-1 ? '1px solid var(--border-subtle)' : 'none', transition: 'background .15s', gap: 14 }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            >
+              {p.product_image && p.product_image.trim() !== '' && (
+                <img src={p.product_image} alt={p.product_title || 'Product'}
+                  style={{ width: 64, height: 64, borderRadius: 10, objectFit: 'cover', flexShrink: 0, border: '1px solid var(--border-subtle)' }}
+                  onError={e => { e.currentTarget.src = 'https://via.placeholder.com/64'; }} />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                  <div>
+                    <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>{p.product_title || 'Unknown Product'}</p>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>Purchased {formatDate(p.created_at)}</p>
+                  </div>
+                  <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 16, color: 'var(--gold-light)', flexShrink: 0 }}>
+                    {(Number(p.price)/1e9).toFixed(2)} <span style={{ fontSize: 11, fontFamily: "'DM Sans',sans-serif", color: 'var(--text-muted)' }}>SUI</span>
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {p.product_category && (
+                    <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: 'rgba(96,165,250,.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,.2)' }}>
+                      {p.product_category}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-muted)' }}>
+                    TX: {p.tx_digest?.slice(0,8)}…
+                  </span>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                    {p.product_file_cid && (
+                      <button onClick={() => handleDownload(p.product_id, p.product_title)}
+                        style={{ padding: '5px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, background: 'rgba(52,211,153,.1)', color: '#34d399', border: '1px solid rgba(52,211,153,.2)', fontFamily: "'DM Sans',sans-serif" } as any}>
+                        📥 Download
+                      </button>
                     )}
-
-                    <div className="ml-4 flex-1">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <h3 className="text-lg font-semibold text-gray-900">
-                            {purchase.product_title || 'Unknown Product'}
-                          </h3>
-                          <p className="text-sm text-gray-500 mt-1">
-                            Purchased on {formatDate(purchase.created_at)}
-                          </p>
-                        </div>
-                        <div className="ml-4 text-right">
-                          <p className="text-lg font-bold text-indigo-600">
-                            {(Number(purchase.price) / 1e9).toFixed(2)} SUI
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-2 flex items-center justify-between">
-                        <div className="flex items-center space-x-4 text-sm text-gray-500">
-                          {purchase.product_category && (
-                            <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
-                              {purchase.product_category}
-                            </span>
-                          )}
-                          <span className="font-mono text-xs">
-                            TX: {purchase.tx_digest?.slice(0, 8)}...
-                          </span>
-                        </div>
-
-                        <div className="flex items-center space-x-2">
-                          {purchase.product_file_cid && (
-                            <button
-                              onClick={() => handleDownload(purchase.product_id)}
-                              className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-500 transition-colors"
-                            >
-                              📥 Download
-                            </button>
-                          )}
-                          <button
-                            onClick={() => {
-                              setSelectedProductId(purchase.product_id);
-                              setIsModalOpen(true);
-                            }}
-                            className="text-sm text-indigo-600 hover:text-indigo-500 font-medium transition-colors"
-                          >
-                            View Product
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <button onClick={() => { setSelectedProductId(p.product_id); setIsModalOpen(true); }}
+                      style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer', fontSize: 12, fontWeight: 500, background: 'transparent', color: 'var(--text-secondary)', fontFamily: "'DM Sans',sans-serif" }}>
+                      View
+                    </button>
                   </div>
                 </div>
-              </li>
-            ))}
-          </ul>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
-      <ProductDetailModal
-        productId={selectedProductId}
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setSelectedProductId(null);
-          fetchPurchases();
-        }}
-      />
+      <ProductDetailModal productId={selectedProductId} isOpen={isModalOpen}
+        onClose={() => { setIsModalOpen(false); setSelectedProductId(null); fetchPurchases(); }} />
     </div>
   );
 }
