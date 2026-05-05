@@ -219,39 +219,11 @@ export default function Profile() {
       const { token } = await tokenRes.json();
       if (!token) { toast.error('Could not generate download link'); return; }
 
-      // Step 2: Fetch the actual file as a blob using the token
-      // The file bytes come back through our server — Pinata URL is never exposed
-      const fileRes = await fetch(`${API_URL}/api/download/file/${token}`, {
-        method: 'GET',
-      });
-      if (!fileRes.ok) {
-        toast.error('Download failed — link may have expired, please try again');
-        return;
-      }
-
-      // Get filename from Content-Disposition header if available
-      const disposition = fileRes.headers.get('content-disposition') || '';
-      const nameMatch   = disposition.match(/filename="?([^"]+)"?/);
-      const fileName    = nameMatch?.[1] || purchase.title || 'download';
-
-      // Convert to blob and trigger browser download — no URL ever shown
-      const blob      = await fileRes.blob();
-      const objectUrl = URL.createObjectURL(blob);
-
-      const a    = document.createElement('a');
-      a.href     = objectUrl;
-      a.download = fileName;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-
-      // Clean up immediately
-      setTimeout(() => {
-        URL.revokeObjectURL(objectUrl);
-        document.body.removeChild(a);
-      }, 100);
-
-      toast.success('Download started! 🎉');
+      // Step 2: Navigate browser to token URL — Content-Disposition: attachment
+      // means browser downloads the file, not navigates to a new page
+      // No second fetch = no CORS preflight = token never consumed prematurely
+      window.location.href = `${API_URL}/api/download/file/${token}`;
+      toast.success('Download starting… 🎉');
     } catch (e: any) {
       toast.error('Download failed. Please try again.');
       console.error('Download error:', e?.message);

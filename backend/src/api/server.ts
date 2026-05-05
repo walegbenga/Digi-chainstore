@@ -1082,60 +1082,6 @@ app.get('/api/download/:productId/:buyerAddress', async (req, res) => {
   }
 });
 
-// Step 2a: POST /api/download/file — accepts token in body, serves file
-// Hidden form POST from frontend — URL never appears in browser bar
-app.post('/api/download/file', async (req: any, res: any) => {
-  try {
-    const token = (req.body?.token || '') as string;
-    if (!token) return res.status(400).send('<h2>Missing token. Please use the Download button.</h2>');
-
-    const entry = downloadTokens.get(token);
-    if (!entry) return res.status(403).send('<h2>Invalid or expired link. Please click Download again.</h2>');
-    if (entry.expires < Date.now()) {
-      downloadTokens.delete(token);
-      return res.status(403).send('<h2>Link expired. Please click Download again.</h2>');
-    }
-
-    // One-time use — delete immediately
-    downloadTokens.delete(token);
-
-    const { file_cid, file_name } = entry;
-
-    // Fetch from Pinata with auth — URL never sent to client
-    const fileRes = await fetch(
-      `https://gateway.pinata.cloud/ipfs/${file_cid}`,
-      { headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}` } }
-    );
-
-    if (!fileRes.ok) return res.status(502).send('<h2>Could not retrieve file. Please contact support.</h2>');
-
-    const contentType   = fileRes.headers.get('content-type')   || 'application/octet-stream';
-    const contentLength = fileRes.headers.get('content-length');
-    const safeName      = (file_name || 'download').replace(/[^a-zA-Z0-9._-]/g, '_');
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-    if (contentLength) res.setHeader('Content-Length', contentLength);
-
-    const arrayBuffer = await fileRes.arrayBuffer();
-    res.end(Buffer.from(arrayBuffer));
-  } catch (error: any) {
-    console.error('Download POST error:', error.message);
-    res.status(500).send('<h2>Download failed. Please try again.</h2>');
-  }
-});
-
-// Preflight for download file — must NOT consume token on OPTIONS
-app.options('/api/download/file/:token', (req: any, res: any) => {
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.sendStatus(204);
-});
-
 // Step 2b: GET /api/download/file/:token
 // Called by frontend fetch() as blob — serves file bytes back
 // Token is one-time use and expires in 60s so sharing the URL does nothing

@@ -56,8 +56,10 @@ export default function MyPurchases() {
   const handleDownload = async (productId: string, fileTitle?: string) => {
     if (!account?.address) return;
     try {
-      // Step 1: Get signed one-time token
-      const tokenRes = await fetch(`${API_URL}/api/download/${productId}/${account.address}`);
+      // Step 1: Get signed one-time token (same-origin fetch, no preflight)
+      const tokenRes = await fetch(
+        `${API_URL}/api/download/${productId}/${account.address}`
+      );
       if (!tokenRes.ok) {
         const e = await tokenRes.json();
         toast.error(e.error || 'Download failed');
@@ -66,24 +68,11 @@ export default function MyPurchases() {
       const { token } = await tokenRes.json();
       if (!token) { toast.error('Could not generate download link'); return; }
 
-      // Step 2: Fetch file bytes as blob — URL never shown in browser
-      const fileRes = await fetch(`${API_URL}/api/download/file/${token}`);
-      if (!fileRes.ok) { toast.error('Download failed — please try again'); return; }
-
-      const disposition = fileRes.headers.get('content-disposition') || '';
-      const nameMatch   = disposition.match(/filename="?([^"]+)"?/);
-      const fileName    = nameMatch?.[1] || fileTitle || 'download';
-
-      const blob      = await fileRes.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a         = document.createElement('a');
-      a.href          = objectUrl;
-      a.download      = fileName;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(objectUrl); document.body.removeChild(a); }, 100);
-      toast.success('Download started! 🎉');
+      // Step 2: Set window.location to trigger native browser download
+      // Content-Disposition: attachment means browser downloads, not navigates
+      // No second fetch = no CORS preflight = token not consumed prematurely
+      window.location.href = `${API_URL}/api/download/file/${token}`;
+      toast.success('Download starting… 🎉');
     } catch (e: any) {
       toast.error('Download failed. Please try again.');
     }
