@@ -1082,50 +1082,57 @@ app.get('/api/download/:productId/:buyerAddress', async (req, res) => {
   }
 });
 
-// Step 2: Redeem token → proxy file from Pinata (IPFS URL never exposed to client)
-app.get('/api/download/file/:token', async (req, res) => {
+// Step 2a: POST /api/download/file — accepts token in body, serves file
+// Hidden form POST from frontend — URL never appears in browser bar
+app.post('/api/download/file', async (req: any, res: any) => {
   try {
-    const { token } = req.params;
-    const entry = downloadTokens.get(token);
+    const token = (req.body?.token || '') as string;
+    if (!token) return res.status(400).send('<h2>Missing token. Please use the Download button.</h2>');
 
-    if (!entry) {
-      return res.status(403).json({ error: 'Invalid or expired download link. Please request a new one.' });
-    }
+    const entry = downloadTokens.get(token);
+    if (!entry) return res.status(403).send('<h2>Invalid or expired link. Please click Download again.</h2>');
     if (entry.expires < Date.now()) {
       downloadTokens.delete(token);
-      return res.status(403).json({ error: 'Download link has expired. Please request a new one.' });
+      return res.status(403).send('<h2>Link expired. Please click Download again.</h2>');
     }
 
-    // Consume token — one-time use
+    // One-time use — delete immediately
     downloadTokens.delete(token);
 
     const { file_cid, file_name } = entry;
 
-    // Proxy the file through our server — client never sees the Pinata/IPFS URL
-    // Node 18+ native fetch — buffer the response and send it
-    const fileRes = await fetch(`https://gateway.pinata.cloud/ipfs/${file_cid}`);
+    // Fetch from Pinata with auth — URL never sent to client
+    const fileRes = await fetch(
+      `https://gateway.pinata.cloud/ipfs/${file_cid}`,
+      { headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}` } }
+    );
 
-    if (!fileRes.ok) {
-      return res.status(502).json({ error: 'Could not fetch file from storage' });
-    }
+    if (!fileRes.ok) return res.status(502).send('<h2>Could not retrieve file. Please contact support.</h2>');
 
-    const contentType = fileRes.headers.get('content-type') || 'application/octet-stream';
+    const contentType   = fileRes.headers.get('content-type')   || 'application/octet-stream';
     const contentLength = fileRes.headers.get('content-length');
+    const safeName      = (file_name || 'download').replace(/[^a-zA-Z0-9._-]/g, '_');
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${file_name || 'download'}"`);
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Robots-Tag', 'noindex');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     if (contentLength) res.setHeader('Content-Length', contentLength);
 
-    // Read as ArrayBuffer → Buffer → send (Web API fetch has no .pipe())
     const arrayBuffer = await fileRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    res.end(buffer);
+    res.end(Buffer.from(arrayBuffer));
   } catch (error: any) {
-    console.error('Download file error:', error.message);
-    res.status(500).json({ error: 'Download failed', detail: error.message });
+    console.error('Download POST error:', error.message);
+    res.status(500).send('<h2>Download failed. Please try again.</h2>');
   }
+});
+
+// Step 2b: Block direct GET access to file tokens — security measure
+app.get('/api/download/file/:token', (req: any, res: any) => {
+  res.status(403).json({
+    error: 'Direct URL access is not permitted. Please use the Download button on your purchases page.',
+  });
 });
 // Upload file to IPFS
 /*app.post('/api/upload', upload.single('file'), async (req: Request, res) => {

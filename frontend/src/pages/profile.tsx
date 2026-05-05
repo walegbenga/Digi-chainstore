@@ -207,23 +207,35 @@ export default function Profile() {
     if (!purchase.file_cid) return toast.error('No file available for this product');
     setDownloading(purchase.product_id);
     try {
-      // Step 1: Get a one-time signed token (60 second expiry)
-      const r = await fetch(`${API_URL}/api/download/${purchase.product_id}/${account!.address}`);
-      if (!r.ok) { 
-        const e = await r.json(); 
-        toast.error(e.error || 'Download failed'); 
-        return; 
+      // Step 1: Get one-time signed token — called silently, API URL never shown to user
+      const r = await fetch(`${API_URL}/api/download/${purchase.product_id}/${account!.address}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!r.ok) {
+        const e = await r.json();
+        toast.error(e.error || 'Download failed');
+        return;
       }
       const { token } = await r.json();
+      if (!token) { toast.error('Could not generate download link'); return; }
 
-      // Step 2: Open the token URL — backend proxies the file, IPFS URL never exposed
-      // Use a hidden anchor to trigger download without opening new tab
-      const a = document.createElement('a');
-      a.href = `${API_URL}/api/download/file/${token}`;
-      a.download = purchase.title || 'download';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      // Step 2: Submit a hidden form using POST so the URL never appears in the browser bar
+      // POST is not visible in address bar unlike GET redirects
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = `${API_URL}/api/download/file`;
+      form.style.display = 'none';
+
+      const tokenInput = document.createElement('input');
+      tokenInput.type  = 'hidden';
+      tokenInput.name  = 'token';
+      tokenInput.value = token;
+      form.appendChild(tokenInput);
+
+      document.body.appendChild(form);
+      form.submit();
+      setTimeout(() => document.body.removeChild(form), 3000);
 
       toast.success('Download started!');
     } catch { toast.error('Download failed. Please try again.'); }
