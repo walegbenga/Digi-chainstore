@@ -207,39 +207,57 @@ export default function Profile() {
     if (!purchase.file_cid) return toast.error('No file available for this product');
     setDownloading(purchase.product_id);
     try {
-      // Step 1: Get one-time signed token — called silently, API URL never shown to user
-      const r = await fetch(`${API_URL}/api/download/${purchase.product_id}/${account!.address}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!r.ok) {
-        const e = await r.json();
+      // Step 1: Get one-time signed token
+      const tokenRes = await fetch(
+        `${API_URL}/api/download/${purchase.product_id}/${account!.address}`
+      );
+      if (!tokenRes.ok) {
+        const e = await tokenRes.json();
         toast.error(e.error || 'Download failed');
         return;
       }
-      const { token } = await r.json();
+      const { token } = await tokenRes.json();
       if (!token) { toast.error('Could not generate download link'); return; }
 
-      // Step 2: Submit a hidden form using POST so the URL never appears in the browser bar
-      // POST is not visible in address bar unlike GET redirects
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = `${API_URL}/api/download/file`;
-      form.style.display = 'none';
+      // Step 2: Fetch the actual file as a blob using the token
+      // The file bytes come back through our server — Pinata URL is never exposed
+      const fileRes = await fetch(`${API_URL}/api/download/file/${token}`, {
+        method: 'GET',
+      });
+      if (!fileRes.ok) {
+        toast.error('Download failed — link may have expired, please try again');
+        return;
+      }
 
-      const tokenInput = document.createElement('input');
-      tokenInput.type  = 'hidden';
-      tokenInput.name  = 'token';
-      tokenInput.value = token;
-      form.appendChild(tokenInput);
+      // Get filename from Content-Disposition header if available
+      const disposition = fileRes.headers.get('content-disposition') || '';
+      const nameMatch   = disposition.match(/filename="?([^"]+)"?/);
+      const fileName    = nameMatch?.[1] || purchase.title || 'download';
 
-      document.body.appendChild(form);
-      form.submit();
-      setTimeout(() => document.body.removeChild(form), 3000);
+      // Convert to blob and trigger browser download — no URL ever shown
+      const blob      = await fileRes.blob();
+      const objectUrl = URL.createObjectURL(blob);
 
-      toast.success('Download started!');
-    } catch { toast.error('Download failed. Please try again.'); }
-    finally { setDownloading(null); }
+      const a    = document.createElement('a');
+      a.href     = objectUrl;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+
+      // Clean up immediately
+      setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+        document.body.removeChild(a);
+      }, 100);
+
+      toast.success('Download started! 🎉');
+    } catch (e: any) {
+      toast.error('Download failed. Please try again.');
+      console.error('Download error:', e?.message);
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const unfavorite = async (productId: string) => {

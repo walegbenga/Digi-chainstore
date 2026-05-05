@@ -1128,11 +1128,54 @@ app.post('/api/download/file', async (req: any, res: any) => {
   }
 });
 
-// Step 2b: Block direct GET access to file tokens — security measure
-app.get('/api/download/file/:token', (req: any, res: any) => {
-  res.status(403).json({
-    error: 'Direct URL access is not permitted. Please use the Download button on your purchases page.',
-  });
+// Step 2b: GET /api/download/file/:token
+// Called by frontend fetch() as blob — serves file bytes back
+// Token is one-time use and expires in 60s so sharing the URL does nothing
+app.get('/api/download/file/:token', async (req: any, res: any) => {
+  try {
+    const { token } = req.params;
+
+    const entry = downloadTokens.get(token);
+    if (!entry) {
+      return res.status(403).json({ error: 'Invalid or expired download link. Click Download again.' });
+    }
+    if (entry.expires < Date.now()) {
+      downloadTokens.delete(token);
+      return res.status(403).json({ error: 'Download link expired. Click Download again.' });
+    }
+
+    // One-time use — delete immediately
+    downloadTokens.delete(token);
+
+    const { file_cid, file_name } = entry;
+
+    // Fetch file from Pinata with auth — URL never sent to client
+    const fileRes = await fetch(
+      `https://gateway.pinata.cloud/ipfs/${file_cid}`,
+      { headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}` } }
+    );
+
+    if (!fileRes.ok) {
+      return res.status(502).json({ error: 'Could not retrieve file from storage' });
+    }
+
+    const contentType   = fileRes.headers.get('content-type')   || 'application/octet-stream';
+    const contentLength = fileRes.headers.get('content-length');
+    const safeName      = (file_name || 'download').replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    const arrayBuffer = await fileRes.arrayBuffer();
+    res.end(Buffer.from(arrayBuffer));
+  } catch (error: any) {
+    console.error('Download GET error:', error.message);
+    res.status(500).json({ error: 'Download failed', detail: error.message });
+  }
 });
 // Upload file to IPFS
 /*app.post('/api/upload', upload.single('file'), async (req: Request, res) => {
