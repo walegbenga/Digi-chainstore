@@ -162,7 +162,7 @@ export default function MyPurchases() {
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                     {p.product_file_cid && (
                       <button onClick={() => handleDownload(p.product_id, p.product_title)}
-                        style={{ padding: '5px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, background: 'rgba(52,211,153,.1)', color: '#34d399', border: '1px solid rgba(52,211,153,.2)', fontFamily: "'DM Sans',sans-serif" } as any}>
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-600 border border-green-200 hover:bg-green-100 cursor-pointer transition-colors">
                         📥 Download
                       </button>
                     )}

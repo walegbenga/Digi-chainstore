@@ -1026,7 +1026,7 @@ const crypto = require('crypto');
 // For production with multiple instances use Redis; fine for single-instance Railway
 const downloadTokens = new Map<string, { file_cid: string; file_name: string; expires: number }>();
 
-// Clean expired tokens every 10 minutes
+// Clean expired tokens every 10 minutes (tokens last 5 mins)
 setInterval(() => {
   const now = Date.now();
   downloadTokens.forEach((val, key) => { if (val.expires < now) downloadTokens.delete(key); });
@@ -1067,14 +1067,14 @@ app.get('/api/download/:productId/:buyerAddress', async (req, res) => {
 
     // Generate a one-time signed token valid for 60 seconds
     const token   = crypto.randomBytes(32).toString('hex');
-    const expires = Date.now() + 60_000; // 60 seconds
+    const expires = Date.now() + 300_000; // 5 minutes
     downloadTokens.set(token, { file_cid, file_name, expires });
 
     // Return the token URL — frontend opens this to download
     res.json({
       token,
       url: `/api/download/file/${token}`,
-      expires_in: 60,
+      expires_in: 300,
     });
   } catch (error: any) {
     console.error('Download token error:', error.message);
@@ -1128,6 +1128,14 @@ app.post('/api/download/file', async (req: any, res: any) => {
   }
 });
 
+// Preflight for download file — must NOT consume token on OPTIONS
+app.options('/api/download/file/:token', (req: any, res: any) => {
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.sendStatus(204);
+});
+
 // Step 2b: GET /api/download/file/:token
 // Called by frontend fetch() as blob — serves file bytes back
 // Token is one-time use and expires in 60s so sharing the URL does nothing
@@ -1135,16 +1143,17 @@ app.get('/api/download/file/:token', async (req: any, res: any) => {
   try {
     const { token } = req.params;
 
+    // Validate token exists and not expired — do NOT consume yet
     const entry = downloadTokens.get(token);
     if (!entry) {
-      return res.status(403).json({ error: 'Invalid or expired download link. Click Download again.' });
+      return res.status(400).json({ error: 'Invalid or expired download link. Click Download again.' });
     }
     if (entry.expires < Date.now()) {
       downloadTokens.delete(token);
-      return res.status(403).json({ error: 'Download link expired. Click Download again.' });
+      return res.status(400).json({ error: 'Download link expired. Click Download again.' });
     }
 
-    // One-time use — delete immediately
+    // Consume token only now — after all validation passes
     downloadTokens.delete(token);
 
     const { file_cid, file_name } = entry;
