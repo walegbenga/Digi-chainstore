@@ -68,10 +68,13 @@ export default function MyPurchases() {
       const { token } = await tokenRes.json();
       if (!token) { toast.error('Could not generate download link'); return; }
 
-      // Step 2: Set window.location to trigger native browser download
-      // Content-Disposition: attachment means browser downloads, not navigates
-      // No second fetch = no CORS preflight = token not consumed prematurely
-      window.location.href = `${API_URL}/api/download/file/${token}`;
+      // Use hidden iframe — triggers download without changing browser URL bar
+      // Content-Disposition: attachment makes browser save the file
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = `${API_URL}/api/download/file/${token}`;
+      document.body.appendChild(iframe);
+      setTimeout(() => document.body.removeChild(iframe), 60000);
       toast.success('Download starting… 🎉');
     } catch (e: any) {
       toast.error('Download failed. Please try again.');

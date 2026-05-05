@@ -60,8 +60,8 @@ const pinata = new PinataSDK({
 
 // ✅ INPUT VALIDATION HELPERS
 const sanitizeAddress = (address: string): string => {
-  // Sui addresses are 66 characters starting with 0x
-  if (!/^0x[a-fA-F0-9]{64}$/.test(address)) {
+  // Sui addresses/object IDs start with 0x followed by 1-64 hex chars
+  if (!/^0x[a-fA-F0-9]{1,64}$/.test(address)) {
     throw new Error('Invalid address format');
   }
   return address.toLowerCase();
