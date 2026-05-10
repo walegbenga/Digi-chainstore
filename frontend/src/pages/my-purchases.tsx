@@ -17,10 +17,11 @@ interface Purchase {
 
 export default function MyPurchases() {
   const account = useCurrentAccount();
-  const [purchases, setPurchases]           = useState<Purchase[]>([]);
-  const [loading, setLoading]               = useState(true);
+  const [purchases, setPurchases]                 = useState<Purchase[]>([]);
+  const [loading, setLoading]                     = useState(true);
+  const [downloading, setDownloading]             = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
-  const [isModalOpen, setIsModalOpen]       = useState(false);
+  const [isModalOpen, setIsModalOpen]             = useState(false);
 
   useEffect(() => {
     if (account?.address) fetchPurchases();
@@ -38,7 +39,13 @@ export default function MyPurchases() {
           try {
             const pr = await fetch(`${API_URL}/api/products/${p.product_id}`);
             const pd = await pr.json();
-            return { ...p, product_title: pd.title, product_image: pd.image_url, product_category: pd.category, product_file_cid: pd.file_cid };
+            return {
+              ...p,
+              product_title:    pd.title,
+              product_image:    pd.image_url,
+              product_category: pd.category,
+              product_file_cid: pd.file_cid,
+            };
           } catch { return p; }
         })
       );
@@ -53,31 +60,51 @@ export default function MyPurchases() {
     return new Date(n).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
   };
 
+  // FIX: replaced iframe approach with fetch + blob for proper error handling
   const handleDownload = async (productId: string, fileTitle?: string) => {
     if (!account?.address) return;
+    setDownloading(productId);
+    const toastId = toast.loading('Preparing download…');
     try {
-      // Step 1: Get signed one-time token (same-origin fetch, no preflight)
+      // Step 1: Get signed one-time token
       const tokenRes = await fetch(
         `${API_URL}/api/download/${productId}/${account.address}`
       );
       if (!tokenRes.ok) {
         const e = await tokenRes.json();
-        toast.error(e.error || 'Download failed');
+        toast.error(e.error || 'Download failed', { id: toastId });
         return;
       }
       const { token } = await tokenRes.json();
-      if (!token) { toast.error('Could not generate download link'); return; }
+      if (!token) {
+        toast.error('Could not generate download link', { id: toastId });
+        return;
+      }
 
-      // Use hidden iframe — triggers download without changing browser URL bar
-      // Content-Disposition: attachment makes browser save the file
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = `${API_URL}/api/download/file/${token}`;
-      document.body.appendChild(iframe);
-      setTimeout(() => document.body.removeChild(iframe), 60000);
-      toast.success('Download starting… 🎉');
+      // Step 2: Fetch file as blob — catches network errors like ERR_INTERNET_DISCONNECTED
+      const fileRes = await fetch(`${API_URL}/api/download/file/${token}`);
+      if (!fileRes.ok) {
+        toast.error('File fetch failed. Try again.', { id: toastId });
+        return;
+      }
+
+      const blob = await fileRes.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = fileTitle || 'download';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success('Download complete! 🎉', { id: toastId });
     } catch (e: any) {
-      toast.error('Download failed. Please try again.');
+      // Catches ERR_INTERNET_DISCONNECTED and similar failures
+      toast.error('Download failed — check your connection.', { id: toastId });
+      console.error('Download error:', e?.message);
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -100,7 +127,7 @@ export default function MyPurchases() {
 
       {loading ? (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 16, overflow: 'hidden' }}>
-          {Array.from({length:4}).map((_,i) => (
+          {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)', gap: 14 }}>
               <div className="skeleton" style={{ width: 64, height: 64, borderRadius: 10, flexShrink: 0 }} />
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
@@ -123,7 +150,7 @@ export default function MyPurchases() {
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 16, overflow: 'hidden' }}>
           {purchases.map((p, idx) => (
             <div key={p.id}
-              style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: idx < purchases.length-1 ? '1px solid var(--border-subtle)' : 'none', transition: 'background .15s', gap: 14 }}
+              style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: idx < purchases.length - 1 ? '1px solid var(--border-subtle)' : 'none', transition: 'background .15s', gap: 14 }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
@@ -139,7 +166,7 @@ export default function MyPurchases() {
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>Purchased {formatDate(p.created_at)}</p>
                   </div>
                   <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 16, color: 'var(--gold-light)', flexShrink: 0 }}>
-                    {(Number(p.price)/1e9).toFixed(2)} <span style={{ fontSize: 11, fontFamily: "'DM Sans',sans-serif", color: 'var(--text-muted)' }}>SUI</span>
+                    {(Number(p.price) / 1e9).toFixed(2)} <span style={{ fontSize: 11, fontFamily: "'DM Sans',sans-serif", color: 'var(--text-muted)' }}>SUI</span>
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -149,16 +176,20 @@ export default function MyPurchases() {
                     </span>
                   )}
                   <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-muted)' }}>
-                    TX: {p.tx_digest?.slice(0,8)}…
+                    TX: {p.tx_digest?.slice(0, 8)}…
                   </span>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                    {/* FIX: loading state added, blob download, proper error handling */}
                     {p.product_file_cid && (
-                      <button onClick={() => handleDownload(p.product_id, p.product_title)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-600 border border-green-200 hover:bg-green-100 cursor-pointer transition-colors">
-                        📥 Download
+                      <button
+                        onClick={() => handleDownload(p.product_id, p.product_title)}
+                        disabled={downloading === p.product_id}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-600 border border-green-200 hover:bg-green-100 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        {downloading === p.product_id ? '⏳ Downloading…' : '📥 Download'}
                       </button>
                     )}
-                    <button onClick={() => { setSelectedProductId(p.product_id); setIsModalOpen(true); }}
+                    <button
+                      onClick={() => { setSelectedProductId(p.product_id); setIsModalOpen(true); }}
                       style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer', fontSize: 12, fontWeight: 500, background: 'transparent', color: 'var(--text-secondary)', fontFamily: "'DM Sans',sans-serif" }}>
                       View
                     </button>
@@ -170,8 +201,11 @@ export default function MyPurchases() {
         </div>
       )}
 
-      <ProductDetailModal productId={selectedProductId} isOpen={isModalOpen}
-        onClose={() => { setIsModalOpen(false); setSelectedProductId(null); fetchPurchases(); }} />
+      <ProductDetailModal
+        productId={selectedProductId}
+        isOpen={isModalOpen}
+        onClose={() => { setIsModalOpen(false); setSelectedProductId(null); fetchPurchases(); }}
+      />
     </div>
   );
 }

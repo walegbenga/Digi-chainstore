@@ -28,8 +28,8 @@ interface SellerProfile {
 type Tab = 'overview' | 'purchases' | 'favorites' | 'following' | 'seller';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const sui      = (n: string | number) => (Number(n) / 1e9).toFixed(3);
-const fmtDate  = (n: string | number) => new Date(Number(n)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const sui       = (n: string | number) => (Number(n) / 1e9).toFixed(3);
+const fmtDate   = (n: string | number) => new Date(Number(n)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const shortAddr = (a: string) => `${a.slice(0, 8)}…${a.slice(-6)}`;
 
 // ── Edit profile modal ────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ function EditProfileModal({ profile, onSave, onClose }: {
   const [avatar,  setAvatar]  = useState(profile?.avatar_url || '');
   const [twitter, setTwitter] = useState(profile?.twitter_handle || '');
   const [website, setWebsite] = useState(profile?.website_url || '');
+  // FIX: single email field
   const [email,   setEmail]   = useState((profile as any)?.email || '');
   const [saving,  setSaving]  = useState(false);
 
@@ -77,23 +78,31 @@ function EditProfileModal({ profile, onSave, onClose }: {
               <input value={avatar} onChange={e => setAvatar(e.target.value)} placeholder="https://..." className={inputCls} />
             </div>
           </div>
+
           <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1">Display Name</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name or store name" maxLength={50} className={inputCls} />
           </div>
+
           <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1">Bio</label>
             <textarea value={bio} onChange={e => setBio(e.target.value)} placeholder="Tell buyers about yourself..." rows={3} maxLength={200} className={`${inputCls} resize-none`} />
             <p className="text-xs text-gray-300 text-right mt-1">{bio.length}/200</p>
           </div>
+
+          {/* FIX: single email field (duplicate removed) */}
           <div>
             <label className="text-xs font-semibold text-gray-600 block mb-1">
               Notification Email
-              <span className="text-gray-400 font-normal ml-1">(for sale & dispute alerts)</span>
+              <span className="text-gray-400 font-normal ml-1">(for sale &amp; dispute alerts)</span>
             </label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)}
               placeholder="you@example.com" maxLength={200} className={inputCls} />
+            <p className="text-xs text-gray-400 mt-1">
+              We'll email you when someone buys your product. Never shared publicly.
+            </p>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-600 block mb-1">Twitter / X</label>
@@ -104,18 +113,8 @@ function EditProfileModal({ profile, onSave, onClose }: {
               <input value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://..." maxLength={200} className={inputCls} />
             </div>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-600 block mb-1">
-              Notification Email
-              <span className="ml-1 text-gray-400 font-normal">(for sale alerts)</span>
-            </label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com" maxLength={200} className={inputCls} />
-            <p className="text-xs text-gray-400 mt-1">
-              We'll email you when someone buys your product. Never shared publicly.
-            </p>
-          </div>
         </div>
+
         <div className="px-6 pb-6 flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 bg-white cursor-pointer">Cancel</button>
           <button onClick={save} disabled={saving}
@@ -133,18 +132,17 @@ export default function Profile() {
   const account                        = useCurrentAccount();
   const { suiFormatted, usdValue }     = useWalletBalance();
 
-  const [tab,           setTab]        = useState<Tab>('overview');
-  const [profile,       setProfile]    = useState<SellerProfile | null>(null);
-  const [purchases,     setPurchases]  = useState<Purchase[]>([]);
-  const [favorites,     setFavorites]  = useState<Favorite[]>([]);
-  const [following,     setFollowing]  = useState<Following[]>([]);
-  const [loading,       setLoading]    = useState(true);
-  const [showEdit,      setShowEdit]   = useState(false);
-  const [downloading,   setDownloading]= useState<string | null>(null);
+  const [tab,         setTab]          = useState<Tab>('overview');
+  const [profile,     setProfile]      = useState<SellerProfile | null>(null);
+  const [purchases,   setPurchases]    = useState<Purchase[]>([]);
+  const [favorites,   setFavorites]    = useState<Favorite[]>([]);
+  const [following,   setFollowing]    = useState<Following[]>([]);
+  const [loading,     setLoading]      = useState(true);
+  const [showEdit,    setShowEdit]     = useState(false);
+  const [downloading, setDownloading]  = useState<string | null>(null);
 
-  // Stats derived from data
-  const totalSpent  = purchases.reduce((s, p) => s + Number(p.price), 0);
-  const isSeller    = profile && Number(profile.total_sales) > 0;
+  const totalSpent = purchases.reduce((s, p) => s + Number(p.price), 0);
+  const isSeller   = profile && Number(profile.total_sales) > 0;
 
   useEffect(() => {
     if (account?.address) loadAll();
@@ -173,7 +171,6 @@ export default function Profile() {
       if (r.ok) {
         const d = await r.json();
         const raw = d.purchases || [];
-        // Enrich with product data
         const enriched = await Promise.all(raw.map(async (p: any) => {
           try {
             const pr = await fetch(`${API_URL}/api/products/${p.product_id}`);
@@ -203,41 +200,59 @@ export default function Profile() {
     } catch {}
   };
 
+  // FIX: fetch + blob approach (replaces fragile iframe method)
   const handleDownload = async (purchase: Purchase) => {
     if (!purchase.file_cid) return toast.error('No file available for this product');
     setDownloading(purchase.product_id);
+    const toastId = toast.loading('Preparing download…');
     try {
-      // Step 1: Get one-time signed token
+      // Step 1: Get signed one-time token
       const tokenRes = await fetch(
         `${API_URL}/api/download/${purchase.product_id}/${account!.address}`
       );
       if (!tokenRes.ok) {
         const e = await tokenRes.json();
-        toast.error(e.error || 'Download failed');
+        toast.error(e.error || 'Download failed', { id: toastId });
         return;
       }
       const { token } = await tokenRes.json();
-      if (!token) { toast.error('Could not generate download link'); return; }
+      if (!token) { toast.error('Could not generate download link', { id: toastId }); return; }
 
-      // Use hidden iframe — triggers download without changing browser URL bar
-      // Content-Disposition: attachment makes browser save the file
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = `${API_URL}/api/download/file/${token}`;
-      document.body.appendChild(iframe);
-      setTimeout(() => document.body.removeChild(iframe), 60000);
-      toast.success('Download starting… 🎉');
+      // Step 2: Fetch file as blob — handles network errors properly
+      const fileRes = await fetch(`${API_URL}/api/download/file/${token}`);
+      if (!fileRes.ok) {
+        toast.error('File fetch failed. Try again.', { id: toastId });
+        return;
+      }
+
+      const blob = await fileRes.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = purchase.title || 'download';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success('Download complete! 🎉', { id: toastId });
     } catch (e: any) {
-      toast.error('Download failed. Please try again.');
+      // Catches ERR_INTERNET_DISCONNECTED and similar network failures
+      toast.error('Download failed — check your connection.', { id: toastId });
       console.error('Download error:', e?.message);
     } finally {
       setDownloading(null);
     }
   };
 
+  // FIX: use correct DELETE /api/favorites endpoint with body (not a URL param)
   const unfavorite = async (productId: string) => {
     try {
-      await fetch(`${API_URL}/api/users/${account!.address}/favorites/${productId}`, { method: 'DELETE' });
+      await fetch(`${API_URL}/api/favorites`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userAddress: account!.address, productId }),
+      });
       setFavorites(f => f.filter(x => x.product_id !== productId));
       toast.success('Removed from favorites');
     } catch {}
@@ -284,8 +299,7 @@ export default function Profile() {
     </div>
   );
 
-  // ── Avatar component ──────────────────────────────────────────────────────
-  const avatarSrc = profile?.avatar_url;
+  const avatarSrc     = profile?.avatar_url;
   const avatarInitial = (profile?.display_name || account.address).slice(0,2).toUpperCase();
 
   const TABS: { id: Tab; icon: string; label: string; count?: number }[] = [
@@ -301,12 +315,9 @@ export default function Profile() {
 
       {/* ── Profile header ── */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-6">
-        {/* Banner */}
         <div className="h-24 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
-
         <div className="px-6 pb-6">
           <div className="flex items-end justify-between -mt-10 mb-4">
-            {/* Avatar */}
             <div className="w-20 h-20 rounded-2xl border-4 border-white bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center overflow-hidden shadow-lg">
               {avatarSrc
                 ? <img src={avatarSrc} alt="avatar" className="w-full h-full object-cover"
@@ -329,7 +340,6 @@ export default function Profile() {
               {profile?.bio && (
                 <p className="text-sm text-gray-600 mt-2 leading-relaxed">{profile.bio}</p>
               )}
-              {/* Social links */}
               <div className="flex items-center gap-3 mt-2">
                 {profile?.twitter_handle && (
                   <a href={`https://twitter.com/${profile.twitter_handle}`} target="_blank" rel="noopener noreferrer"
@@ -392,13 +402,12 @@ export default function Profile() {
           {/* ── Overview ── */}
           {tab === 'overview' && (
             <div className="space-y-6">
-              {/* Quick stats */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
-                  { icon: '📦', label: 'Purchases',   value: purchases.length,               color: 'from-blue-500 to-blue-600' },
-                  { icon: '💸', label: 'Total Spent',  value: `${sui(totalSpent)} SUI`,       color: 'from-purple-500 to-purple-600' },
-                  { icon: '❤️',  label: 'Favorites',   value: favorites.length,               color: 'from-pink-500 to-rose-500' },
-                  { icon: '👥', label: 'Following',    value: following.length,               color: 'from-emerald-500 to-green-600' },
+                  { icon: '📦', label: 'Purchases',  value: purchases.length,        color: 'from-blue-500 to-blue-600' },
+                  { icon: '💸', label: 'Total Spent', value: `${sui(totalSpent)} SUI`, color: 'from-purple-500 to-purple-600' },
+                  { icon: '❤️',  label: 'Favorites',  value: favorites.length,        color: 'from-pink-500 to-rose-500' },
+                  { icon: '👥', label: 'Following',   value: following.length,        color: 'from-emerald-500 to-green-600' },
                 ].map(s => (
                   <div key={s.label} className={`bg-gradient-to-br ${s.color} rounded-2xl p-4 text-white`}>
                     <div className="flex justify-between items-center mb-2">
@@ -410,15 +419,14 @@ export default function Profile() {
                 ))}
               </div>
 
-              {/* Seller stats if applicable */}
               {isSeller && (
                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                   <h2 className="font-bold text-gray-900 mb-4">🛍️ Seller Summary</h2>
                   <div className="grid grid-cols-3 gap-4">
                     {[
-                      { label: 'Total Sales',   value: profile!.total_sales || 0 },
-                      { label: 'Revenue',       value: `${sui(profile!.total_revenue)} SUI` },
-                      { label: 'Followers',     value: profile!.follower_count || 0 },
+                      { label: 'Total Sales', value: profile!.total_sales || 0 },
+                      { label: 'Revenue',     value: `${sui(profile!.total_revenue)} SUI` },
+                      { label: 'Followers',   value: profile!.follower_count || 0 },
                     ].map(s => (
                       <div key={s.label} className="bg-gray-50 rounded-xl p-3 text-center">
                         <p className="text-lg font-black text-gray-900">{s.value}</p>
@@ -437,7 +445,6 @@ export default function Profile() {
                 </div>
               )}
 
-              {/* Recent purchases */}
               {purchases.length > 0 && (
                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                   <div className="flex justify-between items-center mb-4">
@@ -466,7 +473,6 @@ export default function Profile() {
                 </div>
               )}
 
-              {/* Empty state for new users */}
               {purchases.length === 0 && favorites.length === 0 && (
                 <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-10 text-center">
                   <div className="text-5xl mb-4">🛍️</div>
@@ -494,15 +500,12 @@ export default function Profile() {
                 </div>
               ) : purchases.map(p => (
                 <div key={p.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex gap-4 items-start">
-                  {/* Thumbnail */}
                   <div className="w-16 h-16 rounded-xl bg-gray-100 overflow-hidden shrink-0">
                     {p.image_url
                       ? <img src={p.image_url} alt={p.title} className="w-full h-full object-cover" />
                       : <div className="w-full h-full flex items-center justify-center text-2xl">📦</div>
                     }
                   </div>
-
-                  {/* Details */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <h3 className="font-bold text-gray-900 text-sm truncate flex-1">{p.title || 'Product'}</h3>
@@ -518,7 +521,6 @@ export default function Profile() {
                       {p.seller && <> · <span className="font-mono">{shortAddr(p.seller)}</span></>}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      {/* Download */}
                       <button
                         onClick={() => handleDownload(p)}
                         disabled={!!downloading || !p.file_cid}
@@ -529,23 +531,15 @@ export default function Profile() {
                         }`}>
                         {downloading === p.product_id ? '⏳ Downloading…' : '⬇️ Download'}
                       </button>
-
-                      {/* View product */}
                       <Link href={`/seller/${p.seller}`}
                         className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 no-underline transition-colors">
                         👤 Seller
                       </Link>
-
-                      {/* Dispute */}
-                      <Link
-                        href={`/support?tab=dispute&tx=${p.tx_digest}`}
+                      <Link href={`/support?tab=dispute&tx=${p.tx_digest}`}
                         className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-red-100 text-red-500 hover:bg-red-50 no-underline transition-colors">
                         ⚖️ Dispute
                       </Link>
-
-                      {/* TX link */}
-                      <a
-                        href={`https://suiexplorer.com/txblock/${p.tx_digest}?network=testnet`}
+                      <a href={`https://suiexplorer.com/txblock/${p.tx_digest}?network=testnet`}
                         target="_blank" rel="noopener noreferrer"
                         className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50 no-underline transition-colors">
                         🔗 Explorer
