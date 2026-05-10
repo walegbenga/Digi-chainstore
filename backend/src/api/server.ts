@@ -903,6 +903,53 @@ setInterval(() => {
   downloadTokens.forEach((val, key) => { if (val.expires < now) downloadTokens.delete(key); });
 }, 10 * 60 * 1000);
 
+// Step 2: Serve file bytes using token — MUST be above /:productId/:buyerAddress
+app.get('/api/download/file/:token', async (req: any, res: any) => {
+  try {
+    const { token } = req.params;
+
+    const entry = downloadTokens.get(token);
+    if (!entry) {
+      return res.status(400).json({ error: 'Invalid or expired download link. Click Download again.' });
+    }
+    if (entry.expires < Date.now()) {
+      downloadTokens.delete(token);
+      return res.status(400).json({ error: 'Download link expired. Click Download again.' });
+    }
+
+    // Consume token
+    downloadTokens.delete(token);
+
+    const { file_cid, file_name } = entry;
+
+    const fileRes = await fetch(
+      `https://gateway.pinata.cloud/ipfs/${file_cid}`,
+      { headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}` } }
+    );
+
+    if (!fileRes.ok) {
+      return res.status(502).json({ error: 'Could not retrieve file from storage' });
+    }
+
+    const contentType   = fileRes.headers.get('content-type')   || 'application/octet-stream';
+    const contentLength = fileRes.headers.get('content-length');
+    const safeName      = (file_name || 'download').replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    const arrayBuffer = await fileRes.arrayBuffer();
+    res.end(Buffer.from(arrayBuffer));
+  } catch (error: any) {
+    console.error('Download GET error:', error.message);
+    res.status(500).json({ error: 'Download failed', detail: error.message });
+  }
+});
+
 // Step 1: Get signed download token
 app.get('/api/download/:productId/:buyerAddress', async (req, res) => {
   try {
@@ -950,52 +997,7 @@ app.get('/api/download/:productId/:buyerAddress', async (req, res) => {
   }
 });
 
-// Step 2: Serve file bytes using token
-app.get('/api/download/file/:token', async (req: any, res: any) => {
-  try {
-    const { token } = req.params;
 
-    const entry = downloadTokens.get(token);
-    if (!entry) {
-      return res.status(400).json({ error: 'Invalid or expired download link. Click Download again.' });
-    }
-    if (entry.expires < Date.now()) {
-      downloadTokens.delete(token);
-      return res.status(400).json({ error: 'Download link expired. Click Download again.' });
-    }
-
-    // Consume token
-    downloadTokens.delete(token);
-
-    const { file_cid, file_name } = entry;
-
-    const fileRes = await fetch(
-      `https://gateway.pinata.cloud/ipfs/${file_cid}`,
-      { headers: { 'Authorization': `Bearer ${process.env.PINATA_JWT}` } }
-    );
-
-    if (!fileRes.ok) {
-      return res.status(502).json({ error: 'Could not retrieve file from storage' });
-    }
-
-    const contentType   = fileRes.headers.get('content-type')   || 'application/octet-stream';
-    const contentLength = fileRes.headers.get('content-length');
-    const safeName      = (file_name || 'download').replace(/[^a-zA-Z0-9._-]/g, '_');
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    if (contentLength) res.setHeader('Content-Length', contentLength);
-
-    const arrayBuffer = await fileRes.arrayBuffer();
-    res.end(Buffer.from(arrayBuffer));
-  } catch (error: any) {
-    console.error('Download GET error:', error.message);
-    res.status(500).json({ error: 'Download failed', detail: error.message });
-  }
-});
 
 // ==================== Upload Endpoint ====================
 
