@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: suishop
       POSTGRES_PASSWORD: suishop_password_2026
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql

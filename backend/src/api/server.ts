@@ -10,6 +10,7 @@ import { PinataSDK } from 'pinata-web3';
 import multer from 'multer';
 import { Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
+import { createHash } from 'crypto';
 const rateLimit = require('express-rate-limit');
 import { pool } from '../config/database';
 
@@ -1487,6 +1488,375 @@ app.patch('/api/support/disputes/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to update dispute', detail: error.message });
+  }
+});
+
+// ── Utility: generate a readable license key from on-chain data ──
+function buildLicenseKey(licenseObjectId: string): string {
+  // Takes the on-chain object ID and formats it as a readable key
+  // DIGI-XXXX-XXXX-XXXX-XXXX
+  const hash = createHash('sha256').update(licenseObjectId).digest('hex');
+  const parts = hash.match(/.{1,4}/g)!.slice(0, 6).join('-').toUpperCase();
+  return `DIGI-${parts}`;
+}
+
+// ── GET /api/licenses/buyer/:address ────────────────────────
+// All licenses owned by a buyer (with product info)
+app.get('/api/licenses/buyer/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+
+    const result = await pool.query(
+      `SELECT
+         l.*,
+         p.title       AS product_title,
+         p.image_url   AS product_image,
+         p.category    AS product_category,
+         p.file_cid    AS product_file_cid,
+         COUNT(la.id) FILTER (WHERE la.is_active = true) AS active_devices
+       FROM licenses l
+       LEFT JOIN products p  ON l.product_id = p.id
+       LEFT JOIN license_activations la ON l.license_id = la.license_id
+       WHERE l.buyer_address = $1
+       GROUP BY l.id, p.title, p.image_url, p.category, p.file_cid
+       ORDER BY l.issue_timestamp DESC`,
+      [address]
+    );
+
+    res.json({ licenses: result.rows });
+  } catch (error) {
+    console.error('Error fetching buyer licenses:', error);
+    res.status(500).json({ error: 'Failed to fetch licenses' });
+  }
+});
+
+// ── GET /api/licenses/:licenseId ────────────────────────────
+// Single license by its on-chain object ID
+app.get('/api/licenses/:licenseId', async (req, res) => {
+  try {
+    const { licenseId } = req.params;
+
+    const result = await pool.query(
+      `SELECT
+         l.*,
+         p.title     AS product_title,
+         p.image_url AS product_image,
+         p.category  AS product_category,
+         p.license_duration_days
+       FROM licenses l
+       LEFT JOIN products p ON l.product_id = p.id
+       WHERE l.license_id = $1`,
+      [licenseId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'License not found' });
+    }
+
+    // Also fetch active devices
+    const devices = await pool.query(
+      `SELECT device_id, activated_at FROM license_activations
+       WHERE license_id = $1 AND is_active = true
+       ORDER BY activated_at ASC`,
+      [licenseId]
+    );
+
+    res.json({ license: result.rows[0], devices: devices.rows });
+  } catch (error) {
+    console.error('Error fetching license:', error);
+    res.status(500).json({ error: 'Failed to fetch license' });
+  }
+});
+
+// ── GET /api/licenses/product/:productId/buyer/:address ─────
+// Check if a specific buyer has a license for a specific product
+app.get('/api/licenses/product/:productId/buyer/:address', async (req, res) => {
+  try {
+    const { productId, address } = req.params;
+
+    const result = await pool.query(
+      `SELECT l.*,
+         COUNT(la.id) FILTER (WHERE la.is_active = true) AS active_devices
+       FROM licenses l
+       LEFT JOIN license_activations la ON l.license_id = la.license_id
+       WHERE l.product_id = $1 AND l.buyer_address = $2 AND l.status = 'active'
+       GROUP BY l.id
+       ORDER BY l.issue_timestamp DESC
+       LIMIT 1`,
+      [productId, address]
+    );
+
+    res.json({
+      hasLicense: result.rows.length > 0,
+      license: result.rows[0] || null,
+    });
+  } catch (error) {
+    console.error('Error checking license:', error);
+    res.status(500).json({ error: 'Failed to check license' });
+  }
+});
+
+// ── POST /api/licenses/verify ───────────────────────────────
+// Public endpoint — third-party software calls this to verify a key
+// Body: { licenseKey, productId? }
+app.post('/api/licenses/verify', async (req, res) => {
+  try {
+    const { licenseKey, productId } = req.body;
+
+    if (!licenseKey) {
+      return res.status(400).json({ error: 'licenseKey is required' });
+    }
+
+    // Search by license_id (the on-chain object ID we store)
+    // The license key displayed to users is DIGI-XXXXX which we regenerate
+    const query = productId
+      ? `SELECT l.*, p.title AS product_title
+         FROM licenses l
+         LEFT JOIN products p ON l.product_id = p.id
+         WHERE l.license_id = $1 AND l.product_id = $2`
+      : `SELECT l.*, p.title AS product_title
+         FROM licenses l
+         LEFT JOIN products p ON l.product_id = p.id
+         WHERE l.license_id = $1`;
+
+    const params = productId ? [licenseKey, productId] : [licenseKey];
+    const result = await pool.query(query, params);
+
+    if (result.rows.length === 0) {
+      return res.json({ valid: false, message: 'License not found' });
+    }
+
+    const license  = result.rows[0];
+    const now      = Date.now();
+    const isExpired = license.expiry_timestamp > 0 && now > Number(license.expiry_timestamp);
+    const isActive  = license.status === 'active' && !isExpired;
+
+    res.json({
+      valid:          isActive,
+      status:         license.status,
+      expired:        isExpired,
+      product_title:  license.product_title,
+      buyer_address:  license.buyer_address,
+      license_type:   license.license_type,
+      max_activations: license.max_activations,
+      current_activations: license.current_activations,
+      expiry_timestamp: license.expiry_timestamp,
+      renewal_price:  license.renewal_price,
+      message: license.status === 'revoked'
+        ? 'License has been revoked'
+        : isExpired
+        ? 'License has expired — renewal required'
+        : 'License is valid ✅',
+    });
+  } catch (error) {
+    console.error('Error verifying license:', error);
+    res.status(500).json({ error: 'Failed to verify license' });
+  }
+});
+
+// ── GET /api/licenses/seller/:address ───────────────────────
+// Seller analytics — all licenses issued for their products
+app.get('/api/licenses/seller/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+
+    const result = await pool.query(
+      `SELECT
+         l.*,
+         p.title      AS product_title,
+         p.image_url  AS product_image,
+         COUNT(la.id) FILTER (WHERE la.is_active = true) AS active_devices
+       FROM licenses l
+       LEFT JOIN products p ON l.product_id = p.id
+       LEFT JOIN license_activations la ON l.license_id = la.license_id
+       WHERE l.seller_address = $1
+       GROUP BY l.id, p.title, p.image_url
+       ORDER BY l.issue_timestamp DESC
+       LIMIT $2 OFFSET $3`,
+      [address, Number(limit), offset]
+    );
+
+    // Summary stats
+    const stats = await pool.query(
+      `SELECT
+         COUNT(*)                                         AS total_licenses,
+         COUNT(*) FILTER (WHERE status = 'active')       AS active_licenses,
+         COUNT(*) FILTER (WHERE status = 'revoked')      AS revoked_licenses,
+         COUNT(*) FILTER (WHERE expiry_timestamp > 0 AND expiry_timestamp < $2) AS expired_licenses,
+         SUM(renewal_count)                              AS total_renewals
+       FROM licenses
+       WHERE seller_address = $1`,
+      [address, Date.now()]
+    );
+
+    res.json({ licenses: result.rows, stats: stats.rows[0] });
+  } catch (error) {
+    console.error('Error fetching seller licenses:', error);
+    res.status(500).json({ error: 'Failed to fetch seller licenses' });
+  }
+});
+
+// ── POST /api/admin/revoke-license ──────────────────────────
+// Admin revokes a license (mirrors the on-chain revoke_license call)
+app.post('/api/admin/revoke-license', async (req, res) => {
+  try {
+    const { licenseId, adminAddress, reason } = req.body;
+
+    if (!licenseId || !adminAddress) {
+      return res.status(400).json({ error: 'licenseId and adminAddress required' });
+    }
+
+    await pool.query(
+      `UPDATE licenses
+       SET status = 'revoked', updated_at = NOW()
+       WHERE license_id = $1`,
+      [licenseId]
+    );
+
+    // Deactivate all devices for this license
+    await pool.query(
+      `UPDATE license_activations
+       SET is_active = false, deactivated_at = $1
+       WHERE license_id = $2`,
+      [Date.now(), licenseId]
+    );
+
+    console.log(`🚫 License revoked: ${licenseId} by admin ${adminAddress}. Reason: ${reason}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error revoking license:', error);
+    res.status(500).json({ error: 'Failed to revoke license' });
+  }
+});
+
+// ── Indexer sync endpoints ───────────────────────────────────
+// Called by the indexer when it processes chain events
+
+app.post('/api/indexer/license-issued', async (req, res) => {
+  try {
+    const { licenseId, productId, buyer, seller, licenseType,
+            maxActivations, expiryTimestamp, renewalPrice, timestamp, txDigest } = req.body;
+
+    await pool.query(
+      `INSERT INTO licenses (
+         license_id, product_id, buyer_address, seller_address,
+         tx_digest, license_type, max_activations, current_activations,
+         expiry_timestamp, renewal_price, status, renewal_count, issue_timestamp
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,'active',0,$10)
+       ON CONFLICT (license_id) DO NOTHING`,
+      [licenseId, productId, buyer, seller, txDigest,
+       licenseType, maxActivations, expiryTimestamp, renewalPrice, timestamp]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing LicenseIssued:', error);
+    res.status(500).json({ error: 'Failed to sync license' });
+  }
+});
+
+app.post('/api/indexer/license-activated', async (req, res) => {
+  try {
+    const { licenseId, deviceId, activationsUsed, timestamp } = req.body;
+
+    // Upsert the activation row
+    await pool.query(
+      `INSERT INTO license_activations (license_id, device_id, activated_at, is_active)
+       VALUES ($1,$2,$3,true)
+       ON CONFLICT (license_id, device_id) DO UPDATE SET
+         is_active = true, activated_at = $3, deactivated_at = NULL`,
+      [licenseId, deviceId, timestamp]
+    );
+
+    // Keep current_activations in sync
+    await pool.query(
+      `UPDATE licenses SET current_activations = $1, updated_at = NOW()
+       WHERE license_id = $2`,
+      [activationsUsed, licenseId]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing LicenseActivated:', error);
+    res.status(500).json({ error: 'Failed to sync activation' });
+  }
+});
+
+app.post('/api/indexer/license-deactivated', async (req, res) => {
+  try {
+    const { licenseId, deviceId, activationsUsed, timestamp } = req.body;
+
+    await pool.query(
+      `UPDATE license_activations
+       SET is_active = false, deactivated_at = $1
+       WHERE license_id = $2 AND device_id = $3`,
+      [timestamp, licenseId, deviceId]
+    );
+
+    await pool.query(
+      `UPDATE licenses SET current_activations = $1, updated_at = NOW()
+       WHERE license_id = $2`,
+      [activationsUsed, licenseId]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing LicenseDeactivated:', error);
+    res.status(500).json({ error: 'Failed to sync deactivation' });
+  }
+});
+
+app.post('/api/indexer/license-renewed', async (req, res) => {
+  try {
+    const { licenseId, owner, newExpiry, renewalCount,
+            amountPaid, txDigest, oldExpiry, timestamp } = req.body;
+
+    await pool.query(
+      `UPDATE licenses
+       SET expiry_timestamp = $1, status = 'active',
+           renewal_count = $2, updated_at = NOW()
+       WHERE license_id = $3`,
+      [newExpiry, renewalCount, licenseId]
+    );
+
+    // Record in renewal audit table
+    await pool.query(
+      `INSERT INTO license_renewals (
+         license_id, buyer_address, amount_paid, tx_digest,
+         old_expiry, new_expiry, renewal_number, created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [licenseId, owner, amountPaid, txDigest, oldExpiry, newExpiry, renewalCount, timestamp]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing LicenseRenewed:', error);
+    res.status(500).json({ error: 'Failed to sync renewal' });
+  }
+});
+
+app.post('/api/indexer/license-revoked', async (req, res) => {
+  try {
+    const { licenseId } = req.body;
+
+    await pool.query(
+      `UPDATE licenses SET status = 'revoked', updated_at = NOW()
+       WHERE license_id = $1`,
+      [licenseId]
+    );
+
+    await pool.query(
+      `UPDATE license_activations SET is_active = false, deactivated_at = $1
+       WHERE license_id = $2`,
+      [Date.now(), licenseId]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing LicenseRevoked:', error);
+    res.status(500).json({ error: 'Failed to sync revocation' });
   }
 });
 
