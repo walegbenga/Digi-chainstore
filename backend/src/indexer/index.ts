@@ -73,37 +73,41 @@ async function handleProductListed(event: any) {
 
     console.log(`   Title: ${title} | Resellable: ${resellable} | File: ${fileCid}`);
 
-    await pool.query(
-      `INSERT INTO products (
-         id, seller, title, description, price, image_url, category,
-         is_available, total_sales, rating_sum, rating_count,
-         quantity, available_quantity, resellable, file_cid, license_type, 
-         license_max_activations, license_duration_days, license_renewal_price, created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,EXTRACT(EPOCH FROM NOW())::BIGINT * 1000)
-       ON CONFLICT (id) DO UPDATE SET
-         title              = EXCLUDED.title,
-         description        = EXCLUDED.description,
-         price              = EXCLUDED.price,
-         image_url          = EXCLUDED.image_url,
-         category           = EXCLUDED.category,
-         is_available       = EXCLUDED.is_available,
-         quantity           = EXCLUDED.quantity,
-         available_quantity = EXCLUDED.available_quantity,
-         resellable         = EXCLUDED.resellable,
-         file_cid           = EXCLUDED.file_cid,
-         license_type             = EXCLUDED.license_type,
-         license_max_activations  = EXCLUDED.license_max_activations,
-         license_duration_days    = EXCLUDED.license_duration_days,
-         license_renewal_price    = EXCLUDED.license_renewal_price,
-         updated_at         = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000`,
-      [
-        productId, seller, title, description, price, imageUrl, category,
-        isActive, 0, 0, 0, quantityAvailable, quantityAvailable,
-        resellable, fileCid,
-        licenseType, licenseMaxActivations, licenseDurationDays, licenseRenewalPrice, 
-        Number(timestamp),
-      ]
-    );
+    // NEW - fixed (21 columns, $1–$20 + 1 expression)
+await pool.query(
+  `INSERT INTO products (
+     id, seller, title, description, price, image_url, category,
+     is_available, total_sales, rating_sum, rating_count,
+     quantity, available_quantity, resellable, file_cid,
+     license_type, license_max_activations, license_duration_days, license_renewal_price,
+     created_at, updated_at
+   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+     EXTRACT(EPOCH FROM NOW())::BIGINT * 1000)
+   ON CONFLICT (id) DO UPDATE SET
+     title                   = EXCLUDED.title,
+     description             = EXCLUDED.description,
+     price                   = EXCLUDED.price,
+     image_url               = EXCLUDED.image_url,
+     category                = EXCLUDED.category,
+     is_available            = EXCLUDED.is_available,
+     quantity                = EXCLUDED.quantity,
+     available_quantity      = EXCLUDED.available_quantity,
+     resellable              = EXCLUDED.resellable,
+     file_cid                = EXCLUDED.file_cid,
+     license_type            = EXCLUDED.license_type,
+     license_max_activations = EXCLUDED.license_max_activations,
+     license_duration_days   = EXCLUDED.license_duration_days,
+     license_renewal_price   = EXCLUDED.license_renewal_price,
+     updated_at              = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000`,
+  [
+    productId, seller, title, description, price, imageUrl, category, // $1–$7
+    isActive, 0, 0, 0,                                                // $8–$11
+    quantityAvailable, quantityAvailable,                             // $12–$13
+    resellable, fileCid,                                              // $14–$15
+    licenseType, licenseMaxActivations, licenseDurationDays, licenseRenewalPrice, // $16–$19
+    Number(timestamp),                                                // $20 = created_at
+  ]
+);
 
     await pool.query(
       `INSERT INTO sellers (address, display_name, total_sales, total_revenue, follower_count, is_banned, created_at)
