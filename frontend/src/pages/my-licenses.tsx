@@ -145,7 +145,7 @@ export default function MyLicenses() {
 
   const filtered = licenses.filter(l => {
     if (filter === 'active')  return l.status === 'active' && !isExpired(l.expiry_timestamp);
-    if (filter === 'expired') return l.is_revoked  ||  isExpired(l.expires_at);
+    if (filter === 'expired') return l.status === 'revoked' || isExpired(l.expiry_timestamp);
     return true;
   });
 
@@ -212,7 +212,7 @@ export default function MyLicenses() {
             const isActive = license.status === 'active' && !expired;
 
             return (
-              <div key={license.id}
+              <div key={license.license_id}
                 className={`bg-white rounded-2xl border shadow-sm p-5 ${
                   license.status === 'revoked' ? 'border-red-200 opacity-75' :
                   expired ? 'border-orange-200' : 'border-gray-100'
@@ -267,7 +267,7 @@ export default function MyLicenses() {
                       </button>
 
                       {/* Renew if subscription and expired */}
-                      {license.license_type === 3 && (expired || !isActive) && !license.status === 'revoked' && (
+                      {license.license_type === 3 && (expired || !isActive) && license.status !== 'revoked' && (
                         <button
                           onClick={() => toast.error('Renewal requires a wallet transaction — coming soon')}
                           className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-green-100 text-green-700 hover:bg-green-200 border-none cursor-pointer transition-colors">
@@ -277,7 +277,7 @@ export default function MyLicenses() {
 
                       {/* Copy license ID */}
                       <button
-                        onClick={() => { navigator.clipboard.writeText(license.id); toast.success('License ID copied'); }}
+                        onClick={() => { navigator.clipboard.writeText(license.license_id); toast.success('License ID copied'); }}
                         className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50 bg-white cursor-pointer transition-colors">
                         📋 Copy ID
                       </button>
