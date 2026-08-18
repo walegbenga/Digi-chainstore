@@ -1,6 +1,25 @@
-version: '3.8'
-
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: sui-shop-postgres
+    environment:
+      - POSTGRES_USER=suishop
+      - POSTGRES_PASSWORD=suishop
+      - POSTGRES_DB=suishop
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sui-shop-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suishop -d suishop"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Backend API
   backend:
     build:
@@ -12,24 +31,53 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3001
-      - JWT_SECRET=dev-secret-change-in-production
-      - MASTER_SALT=dev-salt-change-in-production
-      - ALLOWED_ORIGINS=http://localhost:3000
-      - SMTP_HOST=smtp.mailtrap.io
-      - SMTP_PORT=2525
-      - SMTP_USER=your-mailtrap-user
-      - SMTP_PASS=your-mailtrap-pass
-      - EMAIL_FROM=noreply@suishop.local
-      - GOOGLE_CLIENT_ID=your-google-client-id
+      - DATABASE_URL=postgresql://suishop:suishop@postgres:5432/suishop
+      - PACKAGE_ID=0x91512472e2e85f34695374394d88c7fa947700d87e53047c923f69dbbf27e877
+      - MARKETPLACE_ID=0x2ce2f197c973c5804f296a4f45237d0401c235d05f200da603ce4570aef3ce1d
       - FRONTEND_URL=http://localhost:3000
+      - PINATA_JWT=${PINATA_JWT}
+      - ADMIN_KEY=${ADMIN_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@digichainstore.com}
     volumes:
       - ./backend:/app
       - /app/node_modules
+      - /app/dist
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - sui-shop-network
     restart: unless-stopped
 
-  # Frontend Web App
+  # Blockchain Indexer
+  indexer:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sui-shop-indexer
+    command: npm run indexer
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://suishop:suishop@postgres:5432/suishop
+      - PACKAGE_ID=0x91512472e2e85f34695374394d88c7fa947700d87e53047c923f69dbbf27e877
+      - MARKETPLACE_ID=0x2ce2f197c973c5804f296a4f45237d0401c235d05f200da603ce4570aef3ce1d
+      - SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@digichainstore.com}
+      - FRONTEND_URL=http://localhost:3000
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - /app/dist
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sui-shop-network
+    restart: unless-stopped
+
+  # Frontend
   frontend:
     build:
       context: ./frontend
@@ -39,8 +87,10 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:3001
-      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-google-client-id
+      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
       - NEXT_PUBLIC_SUI_NETWORK=testnet
+      - NEXT_PUBLIC_PACKAGE_ID=0x91512472e2e85f34695374394d88c7fa947700d87e53047c923f69dbbf27e877
+      - NEXT_PUBLIC_MARKETPLACE_ID=0x2ce2f197c973c5804f296a4f45237d0401c235d05f200da603ce4570aef3ce1d
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -54,3 +104,6 @@ services:
 networks:
   sui-shop-network:
     driver: bridge
+
+volumes:
+  postgres_data:

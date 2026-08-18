@@ -4,7 +4,130 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const NETWORK_URL = 'https://fullnode.testnet.sui.io:443';
+import { Resend } from 'resend';
+import crypto from 'crypto';
+
+// ── Email client ───────────────────────────────────────────────────────────
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@digichainstore.com';
+const SITE_URL   = process.env.FRONTEND_URL || 'https://digi-chainstore.vercel.app';
+
+async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  if (!resend) { console.log(`[Email skipped] To: ${to} | ${subject}`); return; }
+  try {
+    await resend.emails.send({ from: FROM_EMAIL, to, subject, html });
+    console.log(`📧 Sent to ${to}: ${subject}`);
+  } catch (err: any) { console.error(`📧 Email failed:`, err?.message); }
+}
+
+// ── Email templates ────────────────────────────────────────────────────────
+function tplSale(productTitle: string, buyerAddress: string, priceSUI: string, txDigest: string): string {
+  return `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:16px;border:1px solid #e5e7eb;">
+  <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:28px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;">💰 You made a sale!</h1>
+  </div>
+  <div style="padding:24px;">
+    <p style="color:#374151;font-size:14px;">Payment has been sent directly to your wallet.</p>
+    <div style="background:#f9fafb;border-radius:12px;padding:16px;margin:16px 0;">
+      <p style="margin:4px 0;font-size:13px;color:#6b7280;">Product: <strong style="color:#111;">${productTitle}</strong></p>
+      <p style="margin:4px 0;font-size:16px;color:#4f46e5;font-weight:800;">+${priceSUI} SUI</p>
+      <p style="margin:4px 0;font-size:12px;color:#9ca3af;font-family:monospace;">Buyer: ${buyerAddress.slice(0,16)}...${buyerAddress.slice(-6)}</p>
+    </div>
+    <a href="${SITE_URL}/analytics" style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 20px;border-radius:8px;font-weight:700;font-size:13px;text-decoration:none;">View Analytics →</a>
+    <p style="font-size:11px;color:#d1d5db;margin-top:12px;">TX: ${txDigest.slice(0,30)}...</p>
+  </div></div>`;
+}
+
+function tplWelcome(address: string): string {
+  return `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:16px;border:1px solid #e5e7eb;">
+  <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:32px 28px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:24px;font-weight:800;">Welcome to Digi ChainStore 🎉</h1>
+    <p style="color:rgba(255,255,255,0.8);margin:8px 0 0;font-size:14px;">The Digital ChainStore of the People</p>
+  </div>
+  <div style="padding:28px;">
+    <p style="color:#374151;font-size:14px;line-height:1.6;">Your blockchain wallet is ready. Buy and sell digital products — no crypto experience needed.</p>
+    <div style="background:#f9fafb;border-radius:12px;padding:16px;margin:16px 0;">
+      <p style="margin:0 0 4px;font-size:11px;color:#9ca3af;font-weight:600;">YOUR WALLET</p>
+      <p style="margin:0;font-size:11px;font-family:monospace;color:#374151;word-break:break-all;">${address}</p>
+    </div>
+    <a href="${SITE_URL}" style="display:inline-block;background:#4f46e5;color:#fff;padding:12px 28px;border-radius:10px;font-weight:800;font-size:14px;text-decoration:none;">Start Shopping →</a>
+  </div>
+  <div style="background:#f9fafb;padding:14px;text-align:center;border-top:1px solid #e5e7eb;">
+    <p style="margin:0;font-size:11px;color:#9ca3af;">Digi ChainStore &nbsp;·&nbsp; <a href="${SITE_URL}/privacy" style="color:#9ca3af;">Privacy</a> &nbsp;·&nbsp; <a href="${SITE_URL}/terms" style="color:#9ca3af;">Terms</a></p>
+  </div></div>`;
+}
+
+function tplDispute(productTitle: string, reason: string, buyerAddress: string): string {
+  return `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:16px;border:1px solid #e5e7eb;">
+  <div style="background:linear-gradient(135deg,#dc2626,#b91c1c);padding:28px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;">⚖️ Dispute Raised</h1>
+  </div>
+  <div style="padding:24px;">
+    <p style="color:#374151;font-size:14px;">A buyer raised a dispute. Please respond within 48 hours.</p>
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:16px;margin:16px 0;">
+      <p style="margin:4px 0;font-size:13px;color:#6b7280;">Product: <strong style="color:#111;">${productTitle}</strong></p>
+      <p style="margin:4px 0;font-size:13px;color:#dc2626;font-weight:600;">Reason: ${reason.replace(/_/g,' ')}</p>
+      <p style="margin:4px 0;font-size:12px;color:#9ca3af;font-family:monospace;">Buyer: ${buyerAddress.slice(0,16)}...${buyerAddress.slice(-6)}</p>
+    </div>
+    <a href="${SITE_URL}/analytics" style="display:inline-block;background:#dc2626;color:#fff;padding:10px 20px;border-radius:8px;font-weight:700;font-size:13px;text-decoration:none;">View Dashboard →</a>
+  </div></div>`;
+}
+
+function tplDisputeResolved(resolution: string, status: string): string {
+  const won = status === 'resolved';
+  return `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:16px;border:1px solid #e5e7eb;">
+  <div style="background:${won ? 'linear-gradient(135deg,#059669,#047857)' : 'linear-gradient(135deg,#6b7280,#4b5563)'};padding:28px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;">${won ? '✅ Dispute Resolved' : '❌ Dispute Closed'}</h1>
+  </div>
+  <div style="padding:24px;">
+    <p style="color:#374151;font-size:14px;">Your dispute has been reviewed by our team.</p>
+    <div style="background:#f9fafb;border-radius:12px;padding:16px;margin:16px 0;">
+      <p style="margin:0;font-size:13px;color:#374151;"><strong>Resolution:</strong> ${resolution || 'No additional notes.'}</p>
+    </div>
+    <a href="${SITE_URL}/profile" style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 20px;border-radius:8px;font-weight:700;font-size:13px;text-decoration:none;">View My Purchases →</a>
+  </div></div>`;
+}
+
+function tplLicenseKey(
+  productTitle: string,
+  licenseKey: string,
+  licenseId: string,
+  expiresAt: number,
+  maxActivations: number
+): string {
+  const expiry = expiresAt === 0 ? 'Lifetime (never expires)' : new Date(expiresAt).toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const maxAct  = maxActivations === 0 ? 'Unlimited' : String(maxActivations);
+
+  return `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:16px;border:1px solid #e5e7eb;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:28px;text-align:center;">
+    <div style="font-size:36px;margin-bottom:6px;">🔑</div>
+    <h1 style="color:#fff;margin:0;font-size:20px;font-weight:800;">Your License Key</h1>
+    <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:13px;">${productTitle}</p>
+  </div>
+  <div style="padding:24px;">
+    <p style="color:#374151;font-size:13px;margin:0 0 16px;">Thank you for your purchase! Keep this key safe — you will need it to activate the software.</p>
+    <div style="background:#f9fafb;border:2px dashed #d1d5db;border-radius:12px;padding:18px;text-align:center;margin-bottom:18px;">
+      <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:600;letter-spacing:1px;text-transform:uppercase;">License Key</p>
+      <p style="margin:0;font-size:18px;font-weight:900;font-family:monospace;color:#111;letter-spacing:2px;">${licenseKey}</p>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
+      <tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 0;color:#6b7280;font-size:12px;">Activations allowed</td><td style="padding:6px 0;color:#111;font-size:12px;font-weight:600;text-align:right;">${maxAct}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;font-size:12px;">Valid until</td><td style="padding:6px 0;color:#111;font-size:12px;font-weight:600;text-align:right;">${expiry}</td></tr>
+    </table>
+    <a href="${SITE_URL}/my-licenses" style="display:block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px;border-radius:10px;font-weight:700;font-size:13px;text-align:center;">View All My Licenses →</a>
+  </div></div>`;
+}
+
+// Try env var first, then fallback options
+// If one RPC fails, try switching to another in your .env
+const NETWORK_URL = process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+
+const RPC_FALLBACKS = [
+  'https://fullnode.testnet.sui.io:443',
+  'https://testnet.suiet.app',
+  'https://rpc-testnet.suiscan.xyz:443',
+  'https://sui-testnet-endpoint.blockvision.org',
+];
 const PACKAGE_ID = process.env.PACKAGE_ID!;
 const MARKETPLACE_ID = process.env.MARKETPLACE_ID!;
 const POLL_INTERVAL = 5000;
@@ -14,7 +137,6 @@ const suiClient = new SuiClient({ url: NETWORK_URL });
 console.log('✅ Sui Client connected to testnet');
 console.log(`📦 Package ID: ${PACKAGE_ID}`);
 console.log(`🏪 Marketplace ID: ${MARKETPLACE_ID}`);
-
 
 // ── Cursor helpers ────────────────────────────────────────────────────────────
 
@@ -66,48 +188,34 @@ async function handleProductListed(event: any) {
     const isActive          = fields.is_active        !== false;
     const resellable        = fields.resellable       || false;
     const fileCid           = fields.file_cid         || '';
-    const licenseType          = Number(fields.license_type)            || 0;
-    const licenseMaxActivations = Number(fields.license_max_activations) || 1;
-    const licenseDurationDays  = Number(fields.license_duration_days)   || 0;
-    const licenseRenewalPrice  = Number(fields.license_renewal_price)   || 0;
 
     console.log(`   Title: ${title} | Resellable: ${resellable} | File: ${fileCid}`);
 
-    // NEW - fixed (21 columns, $1–$20 + 1 expression)
-await pool.query(
-  `INSERT INTO products (
-     id, seller, title, description, price, image_url, category,
-     is_available, total_sales, rating_sum, rating_count,
-     quantity, available_quantity, resellable, file_cid,
-     license_type, license_max_activations, license_duration_days, license_renewal_price,
-     created_at, updated_at
-   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-     EXTRACT(EPOCH FROM NOW())::BIGINT * 1000)
-   ON CONFLICT (id) DO UPDATE SET
-     title                   = EXCLUDED.title,
-     description             = EXCLUDED.description,
-     price                   = EXCLUDED.price,
-     image_url               = EXCLUDED.image_url,
-     category                = EXCLUDED.category,
-     is_available            = EXCLUDED.is_available,
-     quantity                = EXCLUDED.quantity,
-     available_quantity      = EXCLUDED.available_quantity,
-     resellable              = EXCLUDED.resellable,
-     file_cid                = EXCLUDED.file_cid,
-     license_type            = EXCLUDED.license_type,
-     license_max_activations = EXCLUDED.license_max_activations,
-     license_duration_days   = EXCLUDED.license_duration_days,
-     license_renewal_price   = EXCLUDED.license_renewal_price,
-     updated_at              = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000`,
-  [
-    productId, seller, title, description, price, imageUrl, category, // $1–$7
-    isActive, 0, 0, 0,                                                // $8–$11
-    quantityAvailable, quantityAvailable,                             // $12–$13
-    resellable, fileCid,                                              // $14–$15
-    licenseType, licenseMaxActivations, licenseDurationDays, licenseRenewalPrice, // $16–$19
-    Number(timestamp),                                                // $20 = created_at
-  ]
-);
+    await pool.query(
+      `INSERT INTO products (
+         id, seller, title, description, price, image_url, category,
+         is_available, total_sales, rating_sum, rating_count,
+         quantity, available_quantity, resellable, file_cid,
+         created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,EXTRACT(EPOCH FROM NOW())::BIGINT * 1000)
+       ON CONFLICT (id) DO UPDATE SET
+         title              = EXCLUDED.title,
+         description        = EXCLUDED.description,
+         price              = EXCLUDED.price,
+         image_url          = EXCLUDED.image_url,
+         category           = EXCLUDED.category,
+         is_available       = EXCLUDED.is_available,
+         quantity           = EXCLUDED.quantity,
+         available_quantity = EXCLUDED.available_quantity,
+         resellable         = EXCLUDED.resellable,
+         file_cid           = EXCLUDED.file_cid,
+         updated_at         = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000`,
+      [
+        productId, seller, title, description, price, imageUrl, category,
+        isActive, 0, 0, 0, quantityAvailable, quantityAvailable,
+        resellable, fileCid, Number(timestamp),
+      ]
+    );
 
     await pool.query(
       `INSERT INTO sellers (address, display_name, total_sales, total_revenue, follower_count, is_banned, created_at)
@@ -157,6 +265,23 @@ async function handleProductPurchased(event: any) {
     `UPDATE sellers SET total_sales = total_sales + 1, total_revenue = total_revenue + $1, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000 WHERE address = $2`,
     [price, seller]
   );
+
+  // ── Email seller about sale ────────────────────────────────────────────
+  try {
+    const sellerRow = await pool.query(
+      'SELECT email, display_name FROM sellers WHERE address = $1',
+      [seller]
+    );
+    const productRow = await pool.query('SELECT title FROM products WHERE id = $1', [productId]);
+    if (sellerRow.rows[0]?.email && productRow.rows[0]) {
+      const priceSUI = (Number(price) / 1e9).toFixed(3);
+      await sendEmail(
+        sellerRow.rows[0].email,
+        `💰 You sold "${productRow.rows[0].title}" for ${priceSUI} SUI`,
+        tplSale(productRow.rows[0].title, buyer, priceSUI, event.id.txDigest)
+      );
+    }
+  } catch (emailErr: any) { console.error('Sale email error:', emailErr?.message); }
 
   // ── Create ownership token for resellable products ──────────────────────
   const productCheck = await pool.query(
@@ -352,217 +477,188 @@ async function handleResaleDelisted(event: any) {
   console.log(`✅ Resale delisted, token available again`);
 }
 
-async function handleSellerVerified(event: any) {
-  const fields = event.parsedJson as any;
-  console.log(`✅ SellerVerified: ${fields.seller}`);
 
-  await pool.query(
-    `UPDATE sellers 
-     SET is_verified = true, verified_at = $1, verified_by = $2, updated_at = NOW()
-     WHERE address = $3`,
-    [Number(fields.timestamp), fields.verified_by, fields.seller]
-  );
+// ── License key generation ─────────────────────────────────────────────────
+const KEY_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 32 chars, no ambiguous (0,O,I,1,L)
 
-  // Boost all their products in ranking
-  await pool.query(
-    `UPDATE products SET seller_is_verified = true WHERE seller = $1`,
-    [fields.seller]
-  );
+function generateLicenseKey(licenseId: string, txDigest: string, buyerAddress: string): string {
+  const seed = `${licenseId}:${txDigest}:${buyerAddress}`;
+  const hash = crypto.createHash('sha256').update(seed).digest();
 
-  console.log(`✅ Seller verification synced: ${fields.seller}`);
+  const chars: string[] = [];
+  for (let i = 0; i < 25; i++) {
+    chars.push(KEY_CHARS[hash[i % hash.length] % 32]);
+  }
+
+  return [
+    chars.slice(0,  5).join(''),
+    chars.slice(5,  10).join(''),
+    chars.slice(10, 15).join(''),
+    chars.slice(15, 20).join(''),
+    chars.slice(20, 25).join(''),
+  ].join('-');
 }
 
-async function handleBuyerVerified(event: any) {
-  const fields = event.parsedJson as any;
-  console.log(`✅ BuyerVerified: ${fields.buyer}`);
+async function generateUniqueLicenseKey(licenseId: string, txDigest: string, buyerAddress: string): Promise<string> {
+  let attempt = 0;
+  while (true) {
+    const suffix = attempt === 0 ? '' : `:attempt${attempt}`;
+    const key = generateLicenseKey(licenseId, txDigest + suffix, buyerAddress);
 
-  await pool.query(
-    `INSERT INTO verified_buyers (address, verified_at, verified_by, is_active)
-     VALUES ($1, $2, $3, true)
-     ON CONFLICT (address) DO UPDATE SET
-       verified_at = $2,
-       verified_by = $3,
-       is_active   = true`,
-    [fields.buyer, Number(fields.timestamp), fields.verified_by]
-  );
+    const existing = await pool.query('SELECT id FROM licenses WHERE license_key = $1', [key]);
+    if (existing.rows.length === 0) return key;
 
-  console.log(`✅ Buyer verification synced: ${fields.buyer}`);
+    attempt++;
+    if (attempt > 10) throw new Error('Could not generate unique license key after 10 attempts');
+  }
 }
 
-// ── Handler: LicenseIssued ───────────────────────────────────
+// ── handleLicenseIssued ────────────────────────────────────────────────────
 async function handleLicenseIssued(event: any) {
   const f = event.parsedJson as any;
 
-  const licenseId     = f.license_id;
-  const productId     = f.product_id;
-  const buyer         = f.buyer;
-  const licenseType   = Number(f.license_type);
-  const maxAct        = Number(f.max_activations);
-  const expiry        = Number(f.expiry_timestamp);
-  const timestamp     = Number(f.timestamp);
+  const licenseId   = f.license_id as string;
+  const productId   = f.product_id as string;
+  const owner       = f.owner as string;
+  const licenseType = Number(f.license_type);
+  const expiresAt   = Number(f.expires_at);
+  const timestamp   = Number(f.timestamp);
+  const txDigest    = event.id.txDigest as string;
 
-  console.log(`🔑 LicenseIssued: ${licenseId} → ${buyer}`);
+  console.log(`🔑 LicenseIssued: ${licenseId} → owner ${owner}`);
 
   try {
-    // Fetch seller from products table
     const productRow = await pool.query(
-      'SELECT seller, license_renewal_price FROM products WHERE id = $1',
+      `SELECT seller, title, license_max_activations, license_renewal_price FROM products WHERE id = $1`,
       [productId]
     );
-    const seller       = productRow.rows[0]?.seller       || '';
-    const renewalPrice = productRow.rows[0]?.license_renewal_price || 0;
+
+    const seller         = productRow.rows[0]?.seller                  || '';
+    const productTitle   = productRow.rows[0]?.title                   || 'your product';
+    const maxActivations = productRow.rows[0]?.license_max_activations || 1;
+    const renewalPrice   = productRow.rows[0]?.license_renewal_price   || 0;
+
+    const licenseKey = await generateUniqueLicenseKey(licenseId, txDigest, owner);
 
     await pool.query(
       `INSERT INTO licenses (
-         license_id, product_id, buyer_address, seller_address,
+         license_id, license_key, product_id, buyer_address, seller_address,
          tx_digest, license_type, max_activations, current_activations,
          expiry_timestamp, renewal_price, status, renewal_count, issue_timestamp
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,'active',0,$10)
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$10,'active',0,$11)
        ON CONFLICT (license_id) DO NOTHING`,
-      [
-        licenseId, productId, buyer, seller,
-        event.id.txDigest, licenseType, maxAct,
-        expiry, renewalPrice, timestamp,
-      ]
+      [licenseId, licenseKey, productId, owner, seller, txDigest,
+       licenseType, maxActivations, expiresAt, renewalPrice, timestamp]
     );
 
-    console.log(`✅ License stored: ${licenseId}`);
-  } catch (error) {
-    console.error(`❌ Error handling LicenseIssued ${licenseId}:`, error);
+    // Email buyer their license key
+    try {
+      const buyerEmailRow = await pool.query('SELECT email FROM sellers WHERE address = $1', [owner]);
+      if (buyerEmailRow.rows[0]?.email) {
+        await sendEmail(
+          buyerEmailRow.rows[0].email,
+          `🔑 Your license key for "${productTitle}"`,
+          tplLicenseKey(productTitle, licenseKey, licenseId, expiresAt, maxActivations)
+        );
+      }
+    } catch (emailErr: any) {
+      console.error('License email error:', emailErr?.message);
+    }
+
+    console.log(`✅ License key generated: ${licenseKey}`);
+  } catch (error: any) {
+    console.error(`❌ Error handling LicenseIssued ${licenseId}:`, error?.message);
   }
 }
 
-// ── Handler: LicenseActivated ────────────────────────────────
+// ── handleLicenseActivated ─────────────────────────────────────────────────
 async function handleLicenseActivated(event: any) {
   const f = event.parsedJson as any;
 
-  const licenseId      = f.license_id;
-  const deviceId       = f.device_id;
+  const licenseId       = f.license_id as string;
+  const deviceId        = f.device_id as string;
   const activationsUsed = Number(f.activations_used);
-  const timestamp      = Number(f.timestamp);
+  const timestamp       = Number(f.timestamp);
 
-  console.log(`🖥️  LicenseActivated: ${licenseId} device:${deviceId.slice(0, 16)}…`);
+  console.log(`🔑 LicenseActivated: ${licenseId} device=${deviceId}`);
 
   try {
+    await pool.query(
+      `UPDATE licenses SET current_activations = $1, updated_at = NOW() WHERE license_id = $2`,
+      [activationsUsed, licenseId]
+    );
+
     await pool.query(
       `INSERT INTO license_activations (license_id, device_id, activated_at, is_active)
        VALUES ($1,$2,$3,true)
-       ON CONFLICT (license_id, device_id) DO UPDATE SET
-         is_active = true, activated_at = $3, deactivated_at = NULL`,
+       ON CONFLICT (license_id, device_id)
+       DO UPDATE SET activated_at = $3, deactivated_at = NULL, is_active = true`,
       [licenseId, deviceId, timestamp]
     );
 
-    await pool.query(
-      `UPDATE licenses SET current_activations = $1, updated_at = NOW()
-       WHERE license_id = $2`,
-      [activationsUsed, licenseId]
-    );
-
-    console.log(`✅ Activation recorded (${activationsUsed} active)`);
-  } catch (error) {
-    console.error(`❌ Error handling LicenseActivated ${licenseId}:`, error);
+    console.log(`✅ Activation recorded (total: ${activationsUsed})`);
+  } catch (error: any) {
+    console.error(`❌ Error handling LicenseActivated ${licenseId}:`, error?.message);
   }
 }
 
-// ── Handler: LicenseDeactivated ──────────────────────────────
-async function handleLicenseDeactivated(event: any) {
-  const f = event.parsedJson as any;
-
-  const licenseId      = f.license_id;
-  const deviceId       = f.device_id;
-  const activationsUsed = Number(f.activations_used);
-  const timestamp      = Number(f.timestamp);
-
-  console.log(`🗑️  LicenseDeactivated: ${licenseId}`);
-
-  try {
-    await pool.query(
-      `UPDATE license_activations
-       SET is_active = false, deactivated_at = $1
-       WHERE license_id = $2 AND device_id = $3`,
-      [timestamp, licenseId, deviceId]
-    );
-
-    await pool.query(
-      `UPDATE licenses SET current_activations = $1, updated_at = NOW()
-       WHERE license_id = $2`,
-      [activationsUsed, licenseId]
-    );
-
-    console.log(`✅ Deactivation recorded (${activationsUsed} active)`);
-  } catch (error) {
-    console.error(`❌ Error handling LicenseDeactivated ${licenseId}:`, error);
-  }
-}
-
-// ── Handler: LicenseRenewed ──────────────────────────────────
+// ── handleLicenseRenewed ───────────────────────────────────────────────────
 async function handleLicenseRenewed(event: any) {
   const f = event.parsedJson as any;
 
-  const licenseId    = f.license_id;
-  const owner        = f.owner;
-  const newExpiry    = Number(f.new_expiry);
-  const renewalCount = Number(f.renewal_count);
-  const timestamp    = Number(f.timestamp);
+  const licenseId = f.license_id as string;
+  const newExpiry = Number(f.new_expires_at);
+  const timestamp = Number(f.timestamp);
 
   console.log(`♻️  LicenseRenewed: ${licenseId} → expires ${new Date(newExpiry).toLocaleDateString()}`);
 
   try {
-    // Get old expiry for audit record
     const current = await pool.query(
-      'SELECT expiry_timestamp FROM licenses WHERE license_id = $1',
+      'SELECT expiry_timestamp, renewal_count, buyer_address, renewal_price FROM licenses WHERE license_id = $1',
       [licenseId]
     );
-    const oldExpiry = current.rows[0]?.expiry_timestamp || 0;
+
+    if (current.rows.length === 0) {
+      console.error(`❌ License not found for renewal: ${licenseId}`);
+      return;
+    }
+
+    const { expiry_timestamp: oldExpiry, renewal_count, buyer_address, renewal_price } = current.rows[0];
+    const newRenewalCount = (renewal_count || 0) + 1;
 
     await pool.query(
-      `UPDATE licenses
-       SET expiry_timestamp = $1, status = 'active',
-           renewal_count = $2, updated_at = NOW()
-       WHERE license_id = $3`,
-      [newExpiry, renewalCount, licenseId]
+      `UPDATE licenses SET expiry_timestamp = $1, status = 'active', renewal_count = $2, updated_at = NOW() WHERE license_id = $3`,
+      [newExpiry, newRenewalCount, licenseId]
     );
 
     await pool.query(
-      `INSERT INTO license_renewals (
-         license_id, buyer_address, amount_paid, tx_digest,
-         old_expiry, new_expiry, renewal_number, created_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [licenseId, owner, 0, event.id.txDigest, oldExpiry, newExpiry, renewalCount, timestamp]
+      `INSERT INTO license_renewals (license_id, buyer_address, amount_paid, tx_digest, old_expiry, new_expiry, renewal_number, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [licenseId, buyer_address, renewal_price || 0, event.id.txDigest, oldExpiry || 0, newExpiry, newRenewalCount, timestamp]
     );
 
-    console.log(`✅ Renewal recorded (count: ${renewalCount})`);
-  } catch (error) {
-    console.error(`❌ Error handling LicenseRenewed ${licenseId}:`, error);
+    console.log(`✅ Renewal recorded (count: ${newRenewalCount})`);
+  } catch (error: any) {
+    console.error(`❌ Error handling LicenseRenewed ${licenseId}:`, error?.message);
   }
 }
 
-// ── Handler: LicenseRevoked ──────────────────────────────────
+// ── handleLicenseRevoked ───────────────────────────────────────────────────
 async function handleLicenseRevoked(event: any) {
-  const f = event.parsedJson as any;
-
-  const licenseId = f.license_id;
-  const timestamp = Number(f.timestamp);
+  const licenseId = event.parsedJson?.license_id as string;
 
   console.log(`🚫 LicenseRevoked: ${licenseId}`);
 
   try {
+    await pool.query(`UPDATE licenses SET status = 'revoked', updated_at = NOW() WHERE license_id = $1`, [licenseId]);
     await pool.query(
-      `UPDATE licenses SET status = 'revoked', updated_at = NOW()
-       WHERE license_id = $1`,
-      [licenseId]
+      `UPDATE license_activations SET is_active = false, deactivated_at = $1 WHERE license_id = $2 AND is_active = true`,
+      [Date.now(), licenseId]
     );
-
-    await pool.query(
-      `UPDATE license_activations
-       SET is_active = false, deactivated_at = $1
-       WHERE license_id = $2`,
-      [timestamp, licenseId]
-    );
-
-    console.log(`✅ License revoked in DB`);
-  } catch (error) {
-    console.error(`❌ Error handling LicenseRevoked ${licenseId}:`, error);
+    console.log(`✅ License revoked`);
+  } catch (error: any) {
+    console.error(`❌ Error handling LicenseRevoked ${licenseId}:`, error?.message);
   }
 }
 
@@ -597,13 +693,10 @@ async function processEvents() {
           case 'ResaleListed':         await handleResaleListed(suiEvent);         break;
           case 'ResalePurchased':      await handleResalePurchased(suiEvent);      break;
           case 'ResaleDelisted':       await handleResaleDelisted(suiEvent);       break;
-          case 'SellerVerified':       await handleSellerVerified(suiEvent);       break;
-          case 'BuyerVerified':        await handleBuyerVerified(suiEvent);        break;
-          case 'LicenseIssued':      await handleLicenseIssued(suiEvent);      break;
-          case 'LicenseActivated':   await handleLicenseActivated(suiEvent);   break;
-          case 'LicenseDeactivated': await handleLicenseDeactivated(suiEvent); break;
-          case 'LicenseRenewed':     await handleLicenseRenewed(suiEvent);     break;
-          case 'LicenseRevoked':     await handleLicenseRevoked(suiEvent);     break;
+          case 'LicenseIssued':        await handleLicenseIssued(suiEvent);        break;
+          case 'LicenseActivated':     await handleLicenseActivated(suiEvent);     break;
+          case 'LicenseRenewed':       await handleLicenseRenewed(suiEvent);       break;
+          case 'LicenseRevoked':       await handleLicenseRevoked(suiEvent);       break;
           default: console.log(`ℹ️  Unknown event: ${eventType}`);
         }
 
@@ -635,10 +728,44 @@ async function startIndexer() {
 
   await initializeDatabase();
 
+  // Ensure last_event_cursor column exists (safe to run on existing DBs)
+  await pool.query(`ALTER TABLE indexer_state ADD COLUMN IF NOT EXISTS last_event_cursor TEXT`);
+
   // Seed the single indexer_state row if it doesn't exist yet
   await pool.query(`
     INSERT INTO indexer_state (id, updated_at)
-    VALUES (1, 0) ON CONFLICT (id) DO NOTHING
+    VALUES (1, EXTRACT(EPOCH FROM NOW())::BIGINT * 1000) ON CONFLICT (id) DO NOTHING
+  `);
+
+  // Ensure resale tables exist
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS resale_listings (
+      listing_id TEXT PRIMARY KEY,
+      token_id TEXT NOT NULL,
+      seller TEXT NOT NULL,
+      price BIGINT NOT NULL,
+      original_product_id TEXT NOT NULL,
+      is_active BOOLEAN DEFAULT true,
+      created_at BIGINT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ownership_tokens (
+      token_id TEXT PRIMARY KEY,
+      original_product_id TEXT NOT NULL,
+      current_owner TEXT NOT NULL,
+      previous_owner TEXT,
+      original_seller TEXT NOT NULL,
+      purchase_price BIGINT,
+      purchase_timestamp BIGINT,
+      is_listed_for_resale BOOLEAN DEFAULT false,
+      resale_price BIGINT DEFAULT 0,
+      file_cid TEXT,
+      created_at BIGINT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
   console.log('🔄 Running initial event sync...');

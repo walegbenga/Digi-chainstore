@@ -11,6 +11,8 @@ module sui_commerce::marketplace {
     use std::vector;
     use sui::clock::{Self, Clock};
     use sui::dynamic_field as df;
+    use sui::bcs;
+    use std::hash;
 
     // ======== Error Codes ========
     const ENotProductOwner: u64 = 0;
@@ -27,6 +29,7 @@ module sui_commerce::marketplace {
     const ENotTokenOwner: u64 = 11;
     const EAlreadyListedForResale: u64 = 12;
     const ENotListedForResale: u64 = 13;
+    const ENotAdmin: u64 = 14;
 
     // ======== Constants ========
     const PLATFORM_FEE_BPS: u64 = 200;
@@ -192,6 +195,45 @@ module sui_commerce::marketplace {
         listing_id: ID,
         token_id: ID,
         seller: address,
+        timestamp: u64,
+    }
+
+    // ======== License Structs ========
+    // license_type: 0=none, 1=single-device, 2=multi-device, 3=subscription
+
+    public struct SoftwareLicense has key, store {
+        id: UID,
+        product_id: ID,
+        owner: address,
+        license_key: vector<u8>,
+        license_type: u8,
+        max_activations: u64,
+        activations_used: u64,
+        activated_devices: vector<vector<u8>>,
+        issued_at: u64,
+        expires_at: u64,
+        is_revoked: bool,
+    }
+
+    public struct LicenseIssued has copy, drop {
+        license_id: ID,
+        product_id: ID,
+        owner: address,
+        license_type: u8,
+        expires_at: u64,
+        timestamp: u64,
+    }
+
+    public struct LicenseActivated has copy, drop {
+        license_id: ID,
+        device_id: vector<u8>,
+        activations_used: u64,
+        timestamp: u64,
+    }
+
+    public struct LicenseRenewed has copy, drop {
+        license_id: ID,
+        new_expires_at: u64,
         timestamp: u64,
     }
 
@@ -399,6 +441,56 @@ module sui_commerce::marketplace {
         });
 
         transfer::transfer(receipt, buyer);
+
+        // ── Mint SoftwareLicense if product has licensing enabled ─────────
+        if (product.license_type != 0) {
+            // Generate a unique license key from tx digest + product id + buyer
+            let tx_digest = tx_context::digest(ctx);
+            let product_id_bytes = object::uid_to_bytes(&product.id);
+            let buyer_bytes = bcs::to_bytes(&buyer);
+
+            let mut key_seed: vector<u8> = vector::empty();
+            vector::append(&mut key_seed, *tx_digest);
+            vector::append(&mut key_seed, product_id_bytes);
+            vector::append(&mut key_seed, buyer_bytes);
+            let license_key = hash::sha3_256(key_seed);
+
+            // Calculate expiry: 0 = lifetime, otherwise now + days * ms_per_day
+            let expires_at = if (product.license_duration_days == 0) {
+                0
+            } else {
+                let duration_ms = product.license_duration_days * 24 * 60 * 60 * 1000;
+                now + duration_ms
+            };
+
+            let license_id_uid = object::new(ctx);
+            let license_id     = object::uid_to_inner(&license_id_uid);
+
+            let license = SoftwareLicense {
+                id:                license_id_uid,
+                product_id:        object::uid_to_inner(&product.id),
+                owner:             buyer,
+                license_key,
+                license_type:      product.license_type,
+                max_activations:   product.license_max_activations,
+                activations_used:  0,
+                activated_devices: vector::empty(),
+                issued_at:         now,
+                expires_at,
+                is_revoked:        false,
+            };
+
+            event::emit(LicenseIssued {
+                license_id,
+                product_id: object::uid_to_inner(&product.id),
+                owner: buyer,
+                license_type: product.license_type,
+                expires_at,
+                timestamp: now,
+            });
+
+            transfer::transfer(license, buyer);
+        };
     }
 
     // ======== Resale Functions ========
@@ -675,6 +767,137 @@ module sui_commerce::marketplace {
     }
 
     // ======== View Functions ========
+
+
+    // ======== License Functions ========
+
+    /// Activate a license on a device (identified by device_id bytes)
+    public entry fun activate_license(
+        license: &mut SoftwareLicense,
+        device_id: vector<u8>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(!license.is_revoked, EProductNotForSale);
+        assert!(tx_context::sender(ctx) == license.owner, EUnauthorized);
+
+        // Check not expired
+        if (license.expires_at != 0) {
+            assert!(clock::timestamp_ms(clock) <= license.expires_at, EProductSoldOut);
+        };
+
+        // Check activation limit
+        if (license.max_activations != 0) {
+            assert!(license.activations_used < license.max_activations, EInsufficientPayment);
+        };
+
+        // Check device not already registered
+        let mut i = 0;
+        let len = vector::length(&license.activated_devices);
+        while (i < len) {
+            assert!(*vector::borrow(&license.activated_devices, i) != device_id, EInvalidQuantity);
+            i = i + 1;
+        };
+
+        vector::push_back(&mut license.activated_devices, device_id);
+        license.activations_used = license.activations_used + 1;
+
+        event::emit(LicenseActivated {
+            license_id: object::uid_to_inner(&license.id),
+            device_id,
+            activations_used: license.activations_used,
+            timestamp: clock::timestamp_ms(clock),
+        });
+    }
+
+    /// Deactivate a device from a license (frees up an activation slot)
+    public entry fun deactivate_device(
+        license: &mut SoftwareLicense,
+        device_id: vector<u8>,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == license.owner, EUnauthorized);
+        let mut i = 0;
+        let len = vector::length(&license.activated_devices);
+        while (i < len) {
+            if (*vector::borrow(&license.activated_devices, i) == device_id) {
+                vector::remove(&mut license.activated_devices, i);
+                license.activations_used = license.activations_used - 1;
+                return
+            };
+            i = i + 1;
+        };
+    }
+
+    /// Renew a subscription license by paying the renewal price
+    public entry fun renew_license(
+        platform: &mut Platform,
+        license: &mut SoftwareLicense,
+        product: &Product,
+        payment: Coin<SUI>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(license.license_type == 3, EInvalidQuantity); // subscriptions only
+        assert!(!license.is_revoked, EProductNotForSale);
+        assert!(tx_context::sender(ctx) == license.owner, EUnauthorized);
+        assert!(coin::value(&payment) == product.license_renewal_price, EInsufficientPayment);
+
+        let platform_fee = calculate_fee(product.license_renewal_price, platform.platform_fee_bps);
+        let mut payment_balance = coin::into_balance(payment);
+        let fee_balance = balance::split(&mut payment_balance, platform_fee);
+        balance::join(&mut platform.treasury, fee_balance);
+
+        let seller_coin = coin::from_balance(payment_balance, ctx);
+        transfer::public_transfer(seller_coin, product.seller);
+
+        // Extend from current expiry or now, whichever is later
+        let now = clock::timestamp_ms(clock);
+        let base = if (license.expires_at > now) { license.expires_at } else { now };
+        let extension_ms = product.license_duration_days * 24 * 60 * 60 * 1000;
+        license.expires_at = base + extension_ms;
+
+        event::emit(LicenseRenewed {
+            license_id: object::uid_to_inner(&license.id),
+            new_expires_at: license.expires_at,
+            timestamp: now,
+        });
+    }
+
+    /// Admin: revoke a license (e.g. fraud, refund)
+    public entry fun revoke_license(
+        platform: &Platform,
+        license: &mut SoftwareLicense,
+        ctx: &mut TxContext
+    ) {
+        assert!(tx_context::sender(ctx) == platform.admin, ENotAdmin);
+        license.is_revoked = true;
+    }
+
+    /// View license details
+    public fun get_license_details(license: &SoftwareLicense): (
+        ID, address, u8, u64, u64, u64, u64, bool
+    ) {
+        (
+            license.product_id,
+            license.owner,
+            license.license_type,
+            license.max_activations,
+            license.activations_used,
+            license.issued_at,
+            license.expires_at,
+            license.is_revoked
+        )
+    }
+
+    /// Get the license key (only callable by the owner)
+    public fun get_license_key(
+        license: &SoftwareLicense,
+        ctx: &TxContext
+    ): vector<u8> {
+        assert!(tx_context::sender(ctx) == license.owner, EUnauthorized);
+        license.license_key
+    }
 
     public fun get_product_rating(product: &Product): u64 {
         if (product.review_count == 0) { return 0 };

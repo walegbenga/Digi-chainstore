@@ -155,6 +155,7 @@ CREATE TABLE resale_listings (
 CREATE TABLE IF NOT EXISTS licenses (
   id                  SERIAL PRIMARY KEY,
   license_id          VARCHAR(66) UNIQUE NOT NULL,  -- on-chain object ID
+  license_key         VARCHAR(50) UNIQUE NOT NULL,  -- human-readable XXXXX-XXXXX-XXXXX-XXXXX-XXXXX
   product_id          VARCHAR(66) NOT NULL,
   buyer_address       VARCHAR(66) NOT NULL,
   seller_address      VARCHAR(66) NOT NULL,
@@ -163,7 +164,7 @@ CREATE TABLE IF NOT EXISTS licenses (
   max_activations     INTEGER NOT NULL DEFAULT 1,   -- 0 = unlimited
   current_activations INTEGER NOT NULL DEFAULT 0,
   expiry_timestamp    BIGINT  DEFAULT 0,            -- 0 = lifetime
-  renewal_price       BIGINT  DEFAULT 0,            -- 0 = not renewable
+  renewal_price       BIGINT  DEFAULT 0,
   status              VARCHAR(20) DEFAULT 'active', -- active | revoked | expired
   renewal_count       INTEGER DEFAULT 0,
   issue_timestamp     BIGINT NOT NULL,
@@ -176,9 +177,9 @@ CREATE TABLE IF NOT EXISTS licenses (
 CREATE TABLE IF NOT EXISTS license_activations (
   id             SERIAL PRIMARY KEY,
   license_id     VARCHAR(66) NOT NULL REFERENCES licenses(license_id) ON DELETE CASCADE,
-  device_id      TEXT NOT NULL,                -- hashed device fingerprint
+  device_id      TEXT NOT NULL,
   activated_at   BIGINT NOT NULL,
-  deactivated_at BIGINT,                       -- NULL = still active
+  deactivated_at BIGINT,
   is_active      BOOLEAN DEFAULT true,
   created_at     TIMESTAMP DEFAULT NOW(),
   UNIQUE(license_id, device_id)
@@ -268,14 +269,20 @@ CREATE INDEX IF NOT EXISTS idx_products_seller_verified ON products(seller_is_ve
 CREATE INDEX IF NOT EXISTS idx_verified_buyers_address ON verified_buyers(address);
 
 -- Indexes for fast lookups
-CREATE INDEX IF NOT EXISTS idx_licenses_buyer      ON licenses(buyer_address);
-CREATE INDEX IF NOT EXISTS idx_licenses_seller     ON licenses(seller_address);
-CREATE INDEX IF NOT EXISTS idx_licenses_product    ON licenses(product_id);
-CREATE INDEX IF NOT EXISTS idx_licenses_status     ON licenses(status);
-CREATE INDEX IF NOT EXISTS idx_licenses_object_id  ON licenses(license_id);
-CREATE INDEX IF NOT EXISTS idx_activations_license ON license_activations(license_id);
-CREATE INDEX IF NOT EXISTS idx_activations_device  ON license_activations(device_id);
-CREATE INDEX IF NOT EXISTS idx_renewals_license    ON license_renewals(license_id);
+CREATE INDEX IF NOT EXISTS idx_licenses_buyer        ON licenses(buyer_address);
+CREATE INDEX IF NOT EXISTS idx_licenses_seller       ON licenses(seller_address);
+CREATE INDEX IF NOT EXISTS idx_licenses_product      ON licenses(product_id);
+CREATE INDEX IF NOT EXISTS idx_licenses_status       ON licenses(status);
+CREATE INDEX IF NOT EXISTS idx_licenses_key          ON licenses(license_key);
+CREATE INDEX IF NOT EXISTS idx_activations_license   ON license_activations(license_id);
+CREATE INDEX IF NOT EXISTS idx_renewals_license      ON license_renewals(license_id);
+
+
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS license_type             SMALLINT  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS license_max_activations  INTEGER   DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS license_duration_days    INTEGER   DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS license_renewal_price    BIGINT    DEFAULT 0;
 
 -- ==================== Views ====================
 

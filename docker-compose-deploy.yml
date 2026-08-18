@@ -1,24 +1,49 @@
-version: '3.8'
+version: "3.9"
 
 services:
-  # Sui Contract Deployment
-  sui-deploy:
-    build:
-      context: .
-      dockerfile: contracts/Dockerfile
-    container_name: sui-shop-deploy
-    volumes:
-      - ./move:/contracts
-      - sui-wallet:/root/.sui
-    stdin_open: true
-    tty: true
-    networks:
-      - sui-network
 
+# ---------------------------------
+
+# Sui Smart Contract Deployment
+
+# ---------------------------------
+
+sui-deploy:
+build:
+context: .
+dockerfile: contracts/Dockerfile
+container_name: sui-shop-deploy
+
+```
+# Keep container interactive (optional but useful)
+stdin_open: true
+tty: true
+
+# Mount contracts and wallet
 volumes:
-  sui-wallet:
-    driver: local
+  - ./move:/contracts
+  - sui-wallet:/root/.sui
+
+# Set working directory
+working_dir: /contracts
+
+# Default command (can be overridden)
+command: sh
+
+environment:
+  SUI_NETWORK: testnet
+  SUI_RPC_URL: https://fullnode.testnet.sui.io:443
 
 networks:
-  sui-network:
-    driver: bridge
+  - sui-network
+
+restart: "no"
+```
+
+volumes:
+sui-wallet:
+driver: local
+
+networks:
+sui-network:
+driver: bridge

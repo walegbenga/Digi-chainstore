@@ -1,23 +1,15 @@
-# Frontend Dockerfile
-FROM node:18-alpine
+FROM node:22-alpine
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+RUN npm install --legacy-peer-deps
 
-# Copy source code
 COPY . .
 
-# Build Next.js app
 RUN npm run build
 
-# Expose port
 EXPOSE 3000
 
-# Start Next.js
 CMD ["npm", "start"]
