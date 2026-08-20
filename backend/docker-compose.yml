@@ -14,24 +14,21 @@ services:
     networks:
       - sui-shop-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U suishop -d suishop"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+
 
   # Backend API
   backend:
     build:
       context: .
       dockerfile: Dockerfile
+    image: sui-shop-backend-image
     container_name: sui-shop-backend
     ports:
       - "3001:3001"
     environment:
       - NODE_ENV=development
       - PORT=3001
-      - DATABASE_URL=postgresql://suishop:suishop@postgres:5432/suishop
+      - DATABASE_URL=postgresql://suishop:suishop@postgres:5432/suishop?sslmode=disable
       - PACKAGE_ID=0x91512472e2e85f34695374394d88c7fa947700d87e53047c923f69dbbf27e877
       - MARKETPLACE_ID=0x2ce2f197c973c5804f296a4f45237d0401c235d05f200da603ce4570aef3ce1d
       - FRONTEND_URL=http://localhost:3000
@@ -44,25 +41,22 @@ services:
       - /app/node_modules
       - /app/dist
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     networks:
       - sui-shop-network
     restart: unless-stopped
 
-  # Blockchain Indexer
+  # Blockchain Indexer (reuses backend image, different command)
   indexer:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: sui-shop-backend-image
     container_name: sui-shop-indexer
     command: npm run indexer
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://suishop:suishop@postgres:5432/suishop
+      - DATABASE_URL=postgresql://suishop:suishop@postgres:5432/suishop?sslmode=disable
       - PACKAGE_ID=0x91512472e2e85f34695374394d88c7fa947700d87e53047c923f69dbbf27e877
       - MARKETPLACE_ID=0x2ce2f197c973c5804f296a4f45237d0401c235d05f200da603ce4570aef3ce1d
-      - SUI_RPC_URL=https://fullnode.testnet.sui.io:443
+      - SUI_RPC_URL=https://sui-testnet.mystenlabs.com/graphql
       - RESEND_API_KEY=${RESEND_API_KEY}
       - FROM_EMAIL=${FROM_EMAIL:-noreply@digichainstore.com}
       - FRONTEND_URL=http://localhost:3000
@@ -71,8 +65,8 @@ services:
       - /app/node_modules
       - /app/dist
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
+      - backend
     networks:
       - sui-shop-network
     restart: unless-stopped
